@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>ContaSNC — Empresas</title>
+  <link rel="stylesheet" href="style.css"/>
+  <style>
+    body { display:flex; align-items:flex-start; justify-content:center; min-height:100vh; padding:40px 16px; background:var(--cream); }
+    .emp-page { width:100%; max-width:900px; }
+    .emp-logo { display:flex; align-items:center; gap:14px; margin-bottom:40px; }
+    .emp-logo .logo-icon { width:48px;height:48px;background:var(--navy);border-radius:10px;display:flex;align-items:center;justify-content:center;font-family:'DM Serif Display',serif;font-size:24px;color:var(--gold);flex-shrink:0; }
+    .emp-logo h1 { font-family:'DM Serif Display',serif;font-size:28px;color:var(--navy);line-height:1.1;margin-bottom:2px; }
+    .emp-logo p { font-size:12px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:var(--muted); }
+    .emp-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(270px,1fr)); gap:16px; margin-bottom:24px; }
+    .emp-card { background:var(--white);border:1.5px solid var(--border);border-radius:10px;padding:22px;transition:border-color .15s,box-shadow .15s;position:relative; }
+    .emp-card:hover { border-color:var(--gold);box-shadow:0 4px 16px rgba(27,43,75,0.10); }
+    .emp-card.active-card { border-color:var(--gold);border-width:2px; }
+    .emp-card-nome { font-family:'DM Serif Display',serif;font-size:19px;color:var(--navy);margin-bottom:3px;margin-top:4px; }
+    .emp-card-sub { font-size:12px;color:var(--muted);margin-bottom:10px; }
+    .emp-card-actions { display:flex;gap:6px;margin-top:14px; }
+    .emp-add { border:2px dashed var(--border)!important;background:transparent!important;display:flex!important;flex-direction:column;align-items:center;justify-content:center;min-height:150px;gap:8px;cursor:pointer; }
+    .emp-add:hover { border-color:var(--gold)!important; }
+
+    /* Overlay/modal system para esta página */
+    .overlay { position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:300;display:flex;align-items:center;justify-content:center;padding:16px; }
+    .overlay.hidden { display:none; }
+    .overlay-box { background:var(--white);border-radius:12px;padding:32px;width:100%;box-shadow:0 16px 48px rgba(0,0,0,0.2);position:relative; }
+  </style>
+</head>
+<body>
+<div class="emp-page">
+
+  <div class="emp-logo">
+    <div class="logo-icon">Σ</div>
+    <div>
+      <h1>ContaSNC</h1>
+      <p>Sistema de Contabilidade — SNC Portugal</p>
+    </div>
+  </div>
+
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:20px">
+    <div>
+      <h2 style="font-family:'DM Serif Display',serif;font-size:22px;color:var(--navy)">Seleccione uma Empresa</h2>
+      <p style="font-size:13px;color:var(--muted);margin-top:3px">Ou crie uma nova para começar.</p>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button id="theme-btn" class="btn btn-outline btn-sm" onclick="toggleTema()" title="Modo claro/escuro" style="font-size:16px;padding:5px 10px"></button>
+      <button class="btn btn-outline btn-sm" onclick="importarEmpresa()">⬆ Importar</button>
+      <input type="file" id="import-input" accept=".json" hidden onchange="handleImport(event)"/>
+    </div>
+  </div>
+
+  <div class="emp-grid" id="emp-grid"></div>
+  <p id="sem-empresas" hidden style="text-align:center;font-size:13px;color:var(--muted);margin-top:8px">
+    Sem empresas criadas. Clique em "Nova Empresa" para começar.
+  </p>
+</div>
+
+<!-- ═══ Overlay: Nova / Editar Empresa ═══ -->
+<div id="ov-empresa" class="overlay hidden" onclick="ovClickFora(event,'ov-empresa')">
+  <div class="overlay-box" style="max-width:500px">
+    <h2 id="ov-emp-titulo" style="font-family:'DM Serif Display',serif;font-size:22px;color:var(--navy);margin-bottom:4px">Nova Empresa</h2>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:22px">Preencha os dados. O Plano de Contas SNC é adicionado automaticamente.</p>
+
+    <input type="hidden" id="emp-edit-id"/>
+
+    <div class="form-group">
+      <label class="form-label">Nome da Empresa *</label>
+      <input class="form-input" id="emp-nome" placeholder="Ex: Empresa ABC, Lda." autocomplete="off"/>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">NIF</label>
+        <input class="form-input" id="emp-nif" placeholder="500 000 000" autocomplete="off"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Exercício</label>
+        <input type="number" class="form-input" id="emp-exercicio" value="2025"/>
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Morada</label>
+      <input class="form-input" id="emp-morada" placeholder="Rua, n.º, Localidade" autocomplete="off"/>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Regime de IVA</label>
+      <select class="form-select" id="emp-regime">
+        <option value="mensal">Mensal</option>
+        <option value="trimestral">Trimestral</option>
+        <option value="isento">Isento de IVA</option>
+      </select>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px">
+      <button class="btn btn-outline" onclick="fecharOv('ov-empresa')">Cancelar</button>
+      <button class="btn btn-gold" onclick="guardarEmpresa()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Overlay: Confirmar Eliminação ═══ -->
+<div id="ov-eliminar" class="overlay hidden" onclick="ovClickFora(event,'ov-eliminar')">
+  <div class="overlay-box" style="max-width:420px">
+    <h2 style="font-family:'DM Serif Display',serif;font-size:20px;color:var(--danger);margin-bottom:10px">Eliminar Empresa</h2>
+    <p style="font-size:14px;color:var(--text);margin-bottom:6px">
+      Tem a certeza que pretende eliminar <strong id="eliminar-nome-texto"></strong>?
+    </p>
+    <p style="font-size:13px;color:var(--danger);margin-bottom:24px">
+      Todos os lançamentos, diários e configurações serão apagados permanentemente.
+    </p>
+    <input type="hidden" id="eliminar-id"/>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn btn-outline" onclick="fecharOv('ov-eliminar')">Cancelar</button>
+      <button class="btn" style="background:var(--danger);color:#fff;border:none" onclick="confirmarEliminar()">Eliminar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast container -->
+<div id="toasts" style="position:fixed;bottom:24px;right:24px;z-index:999;display:flex;flex-direction:column;gap:10px;pointer-events:none"></div>
+
+<script src="db.js"></script>
+<script>
+/* ── Tema: aplicar antes de renderizar para evitar flash ── */
+(function() {
+  const t = localStorage.getItem('snc_theme') || 'light';
+  document.documentElement.setAttribute('data-theme', t);
+})();
+
+/* ── Utilitários desta página (independente de script.js) ── */
+function fmtEUR(v) {
+  return new Intl.NumberFormat('pt-PT',{style:'currency',currency:'EUR',minimumFractionDigits:2}).format(v||0);
+}
+
+function toast(msg, tipo) {
+  const cores = {success:'#2D7A4F',info:'#2E4066',warning:'#C9A84C',danger:'#B03A2E'};
+  const icons = {success:'✓',info:'ℹ',warning:'!',danger:'✕'};
+  const el = document.createElement('div');
+  el.style.cssText = `background:${cores[tipo]||cores.success};color:#fff;padding:12px 18px;border-radius:8px;font-family:Inter,sans-serif;font-size:13.5px;font-weight:500;box-shadow:0 4px 16px rgba(0,0,0,0.18);pointer-events:all;display:flex;align-items:center;gap:10px;min-width:220px`;
+  el.innerHTML = `<span>${icons[tipo]||'✓'}</span>${msg}`;
+  document.getElementById('toasts').appendChild(el);
+  setTimeout(()=>{ el.style.opacity='0'; el.style.transition='opacity .3s'; setTimeout(()=>el.remove(),300); }, 3000);
+}
+
+/* ── Overlays (sistema próprio, sem conflito) ── */
+function abrirOv(id) {
+  document.getElementById(id).classList.remove('hidden');
+}
+function fecharOv(id) {
+  document.getElementById(id).classList.add('hidden');
+}
+function ovClickFora(e, id) {
+  // só fecha se clicar no fundo escuro, não no conteúdo
+  if (e.target === document.getElementById(id)) fecharOv(id);
+}
+
+/* Fechar com Escape */
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    fecharOv('ov-empresa');
+    fecharOv('ov-eliminar');
+  }
+});
+
+/* ── Render grelha de empresas ── */
+function renderEmpresas() {
+  const grid    = document.getElementById('emp-grid');
+  const semEl   = document.getElementById('sem-empresas');
+  const empresas = DB.getEmpresas();
+  const activa   = DB.getEmpresaActiva();
+
+  semEl.hidden = empresas.length > 0;
+
+  const cards = empresas.map(emp => {
+    const isActiva = activa && activa.id === emp.id;
+    const stats    = DB.statsEmpresa(emp.id);
+    // escapar apóstrofes no nome para uso inline em onclick
+    const nomeEsc  = emp.nome.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    return `
+      <div class="emp-card${isActiva?' active-card':''}">
+        ${isActiva ? '<span class="badge badge-green" style="position:absolute;top:14px;right:14px">● Activa</span>' : ''}
+        <div class="emp-card-nome">${emp.nome}</div>
+        <div class="emp-card-sub">${emp.nif || 'Sem NIF'} &nbsp;·&nbsp; ${emp.exercicio}</div>
+        <div style="display:flex;gap:14px;font-size:12px;color:var(--muted);margin-bottom:4px">
+          <span>${stats.totalLanc} lançamentos</span>
+          <span>IVA est.: ${fmtEUR(stats.ivaEntregar)}</span>
+        </div>
+        <div class="emp-card-actions">
+          <button class="btn btn-gold btn-sm" style="flex:1" onclick="seleccionar('${emp.id}')">Entrar</button>
+          <button class="btn btn-outline btn-sm" title="Editar" onclick="abrirEditar('${emp.id}')">✏</button>
+          <button class="btn btn-outline btn-sm" title="Exportar backup" onclick="exportar('${emp.id}')">⬇</button>
+          <button class="btn btn-sm" style="background:rgba(176,58,46,0.10);color:var(--danger);border:1.5px solid rgba(176,58,46,0.25)" title="Eliminar" onclick="pedirEliminar('${emp.id}','${nomeEsc}')">✕</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  grid.innerHTML = cards + `
+    <div class="emp-card emp-add" onclick="abrirNova()" role="button" tabindex="0">
+      <div style="font-size:30px;color:var(--border)">+</div>
+      <div style="font-size:13px;font-weight:600;color:var(--muted)">Nova Empresa</div>
+    </div>`;
+}
+
+/* ── Acções ── */
+function seleccionar(id) {
+  DB.setEmpresaActiva(id);
+  location.href = 'index.html';
+}
+
+function abrirNova() {
+  document.getElementById('ov-emp-titulo').textContent = 'Nova Empresa';
+  document.getElementById('emp-edit-id').value = '';
+  document.getElementById('emp-nome').value = '';
+  document.getElementById('emp-nif').value = '';
+  document.getElementById('emp-exercicio').value = new Date().getFullYear();
+  document.getElementById('emp-morada').value = '';
+  document.getElementById('emp-regime').value = 'mensal';
+  abrirOv('ov-empresa');
+  setTimeout(() => document.getElementById('emp-nome').focus(), 50);
+}
+
+function abrirEditar(id) {
+  const emp = DB.getEmpresas().find(e => e.id === id);
+  if (!emp) return;
+  document.getElementById('ov-emp-titulo').textContent = 'Editar Empresa';
+  document.getElementById('emp-edit-id').value = id;
+  document.getElementById('emp-nome').value = emp.nome;
+  document.getElementById('emp-nif').value = emp.nif || '';
+  document.getElementById('emp-exercicio').value = emp.exercicio || new Date().getFullYear();
+  document.getElementById('emp-morada').value = emp.morada || '';
+  document.getElementById('emp-regime').value = emp.regime || 'mensal';
+  abrirOv('ov-empresa');
+  setTimeout(() => document.getElementById('emp-nome').focus(), 50);
+}
+
+function guardarEmpresa() {
+  const nome = document.getElementById('emp-nome').value.trim();
+  if (!nome) {
+    toast('O nome da empresa é obrigatório','danger');
+    document.getElementById('emp-nome').focus();
+    return;
+  }
+  const dados = {
+    nome,
+    nif:      document.getElementById('emp-nif').value.trim(),
+    exercicio:parseInt(document.getElementById('emp-exercicio').value) || new Date().getFullYear(),
+    morada:   document.getElementById('emp-morada').value.trim(),
+    regime:   document.getElementById('emp-regime').value,
+  };
+  const id = document.getElementById('emp-edit-id').value;
+  if (id) {
+    DB.editarEmpresa(id, dados);
+    fecharOv('ov-empresa');
+    toast('Empresa actualizada com sucesso','success');
+    renderEmpresas();
+  } else {
+    const nova = DB.criarEmpresa(dados);
+    DB.setEmpresaActiva(nova.id);
+    fecharOv('ov-empresa');
+    toast('Empresa criada! A entrar…','success');
+    // pequeno delay para o toast ser visível
+    setTimeout(() => { location.href = 'index.html'; }, 900);
+  }
+}
+
+/* Permitir Enter para submeter */
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !document.getElementById('ov-empresa').classList.contains('hidden')) {
+    guardarEmpresa();
+  }
+});
+
+function pedirEliminar(id, nome) {
+  document.getElementById('eliminar-id').value = id;
+  document.getElementById('eliminar-nome-texto').textContent = nome;
+  abrirOv('ov-eliminar');
+}
+
+function confirmarEliminar() {
+  const id = document.getElementById('eliminar-id').value;
+  DB.eliminarEmpresa(id);
+  fecharOv('ov-eliminar');
+  toast('Empresa eliminada','warning');
+  renderEmpresas();
+}
+
+function exportar(id) {
+  DB.exportEmpresa(id);
+  toast('Backup exportado','info');
+}
+
+function importarEmpresa() {
+  document.getElementById('import-input').click();
+}
+
+function handleImport(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    const emp = DB.importEmpresa(ev.target.result);
+    if (emp) {
+      toast(`"${emp.nome}" importada com sucesso`,'success');
+      renderEmpresas();
+    } else {
+      toast('Ficheiro inválido ou corrompido','danger');
+    }
+  };
+  reader.readAsText(file);
+  e.target.value = '';
+}
+
+/* ── Tema ── */
+function toggleTema() {
+  const cur  = document.documentElement.getAttribute('data-theme') || 'light';
+  const next = cur === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('snc_theme', next);
+  updateThemeBtn();
+}
+function updateThemeBtn() {
+  const btn = document.getElementById('theme-btn');
+  if (!btn) return;
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  btn.textContent = isDark ? '🌙' : '☀️';
+  btn.title = isDark ? 'Mudar para modo claro' : 'Mudar para modo escuro';
+}
+
+/* ── Init ── */
+updateThemeBtn();
+renderEmpresas();
+</script>
+</body>
+</html>

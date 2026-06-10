@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>ContaSNC — IVA</title>
+  <link rel="stylesheet" href="style.css"/>
+  <script>(function(){var t=localStorage.getItem("snc_theme")||"light";document.documentElement.setAttribute("data-theme",t);})();</script>
+</head>
+<body>
+<aside class="sidebar" id="sidebar-mount"></aside>
+<div class="main-wrap">
+  <header class="topbar">
+    <div class="topbar-breadcrumb">
+      <a href="index.html" style="color:var(--muted);text-decoration:none">Início</a>
+      <span class="sep">›</span><span class="crumb-current">Processamento de IVA</span>
+    </div>
+    <div class="topbar-actions">
+      <div id="empresa-selector"></div>
+      <button class="btn btn-gold btn-sm" onclick="apurarIVA()">⚡ Apurar IVA</button>
+      <div class="avatar" id="avatar-initials">AC</div>
+    </div>
+  </header>
+  <main class="page-content">
+    <div class="page-hero">
+      <h1>Processamento de IVA</h1>
+      <p>Apuramento automático a partir dos lançamentos registados, exportação SAF-T(PT) e Declaração Periódica.</p>
+    </div>
+
+    <!-- Filtro período -->
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-body" style="padding:14px 20px">
+        <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
+          <div class="form-group" style="margin:0">
+            <label class="form-label">Período De</label>
+            <input type="date" class="form-input" id="iva-de" onchange="calcularApuramento()"/>
+          </div>
+          <div class="form-group" style="margin:0">
+            <label class="form-label">Até</label>
+            <input type="date" class="form-input" id="iva-ate" onchange="calcularApuramento()"/>
+          </div>
+          <button class="btn btn-primary" onclick="calcularApuramento()">Calcular Apuramento</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="stats-grid" id="iva-stats"></div>
+
+    <div class="two-col">
+      <!-- Apuramento -->
+      <div>
+        <div class="card">
+          <div class="card-header"><div><h2>Detalhe do Apuramento</h2><p id="iva-periodo-label">Período seleccionado</p></div></div>
+          <div class="card-body">
+            <table class="data-table" style="font-size:13px">
+              <thead><tr><th>Taxa</th><th>Base Tributável</th><th class="amount">IVA</th></tr></thead>
+              <tbody id="tbody-liquidado"></tbody>
+              <tfoot>
+                <tr style="background:var(--cream)">
+                  <td colspan="2"><strong>Total IVA Liquidado</strong></td>
+                  <td class="amount" id="total-liquidado" style="font-weight:700;color:var(--danger)">—</td>
+                </tr>
+              </tfoot>
+            </table>
+            <div class="divider"></div>
+            <table class="data-table" style="font-size:13px">
+              <thead><tr><th>Dedutível</th><th>Base</th><th class="amount">IVA</th></tr></thead>
+              <tbody id="tbody-dedutivel"></tbody>
+              <tfoot>
+                <tr style="background:var(--cream)">
+                  <td colspan="2"><strong>Total IVA Dedutível</strong></td>
+                  <td class="amount" id="total-dedutivel" style="font-weight:700;color:var(--success)">—</td>
+                </tr>
+              </tfoot>
+            </table>
+            <div id="box-entregar" style="background:rgba(176,58,46,0.06);border:1px solid rgba(176,58,46,0.2);border-radius:8px;padding:14px 16px;margin-top:16px;display:flex;justify-content:space-between;align-items:center">
+              <div>
+                <div style="font-size:12px;color:var(--muted);font-weight:600;letter-spacing:.06em;text-transform:uppercase">IVA a Entregar</div>
+                <div id="valor-entregar" style="font-family:'DM Serif Display',serif;font-size:26px;color:var(--danger)">—</div>
+              </div>
+              <div style="text-align:right">
+                <div style="font-size:11px;color:var(--muted)">Conta 2435/2436</div>
+                <button class="btn btn-primary btn-sm" style="margin-top:6px" onclick="registarApuramento()">Gerar Lançamento</button>
+              </div>
+            </div>
+            <div id="box-recuperar" style="background:rgba(45,122,79,0.06);border:1px solid rgba(45,122,79,0.2);border-radius:8px;padding:14px 16px;margin-top:16px;display:flex;justify-content:space-between;align-items:center;display:none">
+              <div>
+                <div style="font-size:12px;color:var(--muted);font-weight:600;letter-spacing:.06em;text-transform:uppercase">IVA a Recuperar</div>
+                <div id="valor-recuperar" style="font-family:'DM Serif Display',serif;font-size:26px;color:var(--success)">—</div>
+              </div>
+              <span class="badge badge-green">Crédito fiscal</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SAF-T + DP -->
+      <div>
+        <div class="card" style="margin-bottom:16px">
+          <div class="card-header"><div><h2>SAF-T(PT)</h2><p>Standard Audit File — Portugal</p></div></div>
+          <div class="card-body">
+            <div class="alert alert-info">
+              <span class="alert-icon">📄</span>
+              <div>O SAF-T(PT) exporta todos os dados contabilísticos em XML conforme o esquema XSD definido pela Autoridade Tributária.</div>
+            </div>
+            <div id="saft-info" style="display:flex;flex-direction:column;gap:0;margin-bottom:16px;font-size:13px">
+              <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)"><span style="color:var(--muted)">Empresa</span><strong id="saft-empresa">—</strong></div>
+              <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)"><span style="color:var(--muted)">NIF</span><span id="saft-nif">—</span></div>
+              <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)"><span style="color:var(--muted)">Total Lançamentos</span><span id="saft-lancs">—</span></div>
+              <div style="display:flex;justify-content:space-between;padding:8px 0"><span style="color:var(--muted)">Versão esquema</span><span>1.04_01</span></div>
+            </div>
+            <button class="btn btn-primary" style="width:100%;justify-content:center" onclick="gerarSAFT()">⬇ Gerar e Descarregar SAF-T(PT)</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><div><h2>Declaração Periódica IVA</h2><p>Preparação para submissão à AT</p></div></div>
+          <div class="card-body">
+            <div class="alert alert-gold">
+              <span class="alert-icon">⚠</span>
+              <div>Após calcular o apuramento, pré-visualize e submeta a declaração à Autoridade Tributária.</div>
+            </div>
+            <div style="font-size:13px;display:flex;flex-direction:column;gap:0;margin-bottom:16px">
+              <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)"><span style="color:var(--muted)">Campo 06 — IVA Liquidado</span><strong id="dp-liq">—</strong></div>
+              <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)"><span style="color:var(--muted)">Campo 07 — IVA Dedutível</span><strong id="dp-ded">—</strong></div>
+              <div style="display:flex;justify-content:space-between;padding:8px 0"><span style="color:var(--muted)">Campo 93 — A Pagar</span><strong id="dp-pagar" style="color:var(--danger)">—</strong></div>
+            </div>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-outline" style="flex:1;justify-content:center" onclick="previewDP()">👁 Pré-visualizar</button>
+              <button class="btn btn-gold" style="flex:1;justify-content:center" onclick="submeterDP()">✓ Submeter à AT</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Histórico -->
+    <div class="card">
+      <div class="card-header"><div><h2>Histórico de Apuramentos</h2><p>Períodos registados</p></div></div>
+      <table class="data-table" id="tbl-hist">
+        <thead><tr><th>Período</th><th>IVA Liquidado</th><th>IVA Dedutível</th><th>A Pagar/Recuperar</th><th>Registado em</th><th>Estado</th></tr></thead>
+        <tbody id="tbody-hist"></tbody>
+      </table>
+      <div id="sem-hist" hidden style="padding:20px 24px;font-size:13px;color:var(--muted)">Sem apuramentos registados.</div>
+    </div>
+  </main>
+</div>
+
+<script src="db.js"></script>
+<script src="_sidebar.js"></script>
+<script src="script.js"></script>
+<script>
+let empresaId, _liquidado=0, _dedutivel=0;
+
+document.addEventListener('DOMContentLoaded', () => {
+  renderSidebar('iva.html');
+  const emp = DB.empresaActiva();
+  empresaId = emp.id;
+  document.getElementById('avatar-initials').textContent = emp.nome.split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase();
+  document.getElementById('saft-empresa').textContent = emp.nome;
+  document.getElementById('saft-nif').textContent = emp.nif||'—';
+
+  // datas padrão: mês actual
+  const hoje = new Date();
+  const y = hoje.getFullYear(), m = String(hoje.getMonth()+1).padStart(2,'0');
+  document.getElementById('iva-de').value  = `${y}-${m}-01`;
+  document.getElementById('iva-ate').value = new Date(y, hoje.getMonth()+1, 0).toISOString().slice(0,10);
+
+  calcularApuramento();
+  renderHistorico();
+});
+
+function calcularApuramento() {
+  const de  = document.getElementById('iva-de').value;
+  const ate = document.getElementById('iva-ate').value;
+  const lancs = DB.getLancamentos(empresaId).filter(l=>{
+    if (de  && l.data < de)  return false;
+    if (ate && l.data > ate) return false;
+    return l.taxaIva > 0;
+  });
+
+  document.getElementById('saft-lancs').textContent = DB.getLancamentos(empresaId).length;
+  document.getElementById('iva-periodo-label').textContent = de && ate ? `${fmtDate(de)} — ${fmtDate(ate)}` : 'Todos os períodos';
+
+  // liquidado (vendas)
+  const liqPorTaxa = {};
+  lancs.filter(l=>l.diario==='V'||l.diario==='PS').forEach(l=>{
+    if (!liqPorTaxa[l.taxaIva]) liqPorTaxa[l.taxaIva]={base:0,iva:0};
+    liqPorTaxa[l.taxaIva].base += l.valorBase;
+    liqPorTaxa[l.taxaIva].iva  += l.valorIva;
+  });
+  _liquidado = Object.values(liqPorTaxa).reduce((s,x)=>s+x.iva,0);
+
+  document.getElementById('tbody-liquidado').innerHTML = Object.entries(liqPorTaxa).length
+    ? Object.entries(liqPorTaxa).map(([taxa,v])=>`
+        <tr><td><span class="badge badge-muted">${taxa}%</span></td><td>${fmtEUR(v.base)}</td><td class="amount credit">${fmtEUR(v.iva)}</td></tr>
+      `).join('')
+    : '<tr><td colspan="3" style="color:var(--muted);text-align:center;padding:12px">Sem IVA liquidado no período</td></tr>';
+
+  // dedutível (compras)
+  const dedPorTipo = {};
+  lancs.filter(l=>l.diario==='C').forEach(l=>{
+    const k = 'Compras/FSE';
+    if (!dedPorTipo[k]) dedPorTipo[k]={base:0,iva:0};
+    dedPorTipo[k].base += l.valorBase;
+    dedPorTipo[k].iva  += l.valorIva;
+  });
+  _dedutivel = Object.values(dedPorTipo).reduce((s,x)=>s+x.iva,0);
+
+  document.getElementById('tbody-dedutivel').innerHTML = Object.entries(dedPorTipo).length
+    ? Object.entries(dedPorTipo).map(([k,v])=>`
+        <tr><td>${k}</td><td>${fmtEUR(v.base)}</td><td class="amount credit">${fmtEUR(v.iva)}</td></tr>
+      `).join('')
+    : '<tr><td colspan="3" style="color:var(--muted);text-align:center;padding:12px">Sem IVA dedutível no período</td></tr>';
+
+  document.getElementById('total-liquidado').textContent = fmtEUR(_liquidado);
+  document.getElementById('total-dedutivel').textContent = fmtEUR(_dedutivel);
+
+  const saldo = _liquidado - _dedutivel;
+  document.getElementById('valor-entregar').textContent  = fmtEUR(Math.abs(saldo));
+  document.getElementById('valor-recuperar').textContent = fmtEUR(Math.abs(saldo));
+  document.getElementById('box-entregar').style.display  = saldo >= 0 ? 'flex' : 'none';
+  document.getElementById('box-recuperar').style.display = saldo < 0  ? 'flex' : 'none';
+
+  document.getElementById('dp-liq').textContent   = fmtEUR(_liquidado);
+  document.getElementById('dp-ded').textContent   = fmtEUR(_dedutivel);
+  document.getElementById('dp-pagar').textContent = fmtEUR(Math.max(0,saldo));
+
+  document.getElementById('iva-stats').innerHTML = `
+    <div class="stat-card"><div class="stat-label">IVA Liquidado</div><div class="stat-value">${fmtEUR(_liquidado)}</div><div class="stat-sub">Conta 2433</div></div>
+    <div class="stat-card green"><div class="stat-label">IVA Dedutível</div><div class="stat-value">${fmtEUR(_dedutivel)}</div><div class="stat-sub">Conta 2432</div></div>
+    <div class="stat-card ${saldo>=0?'danger':'green'}"><div class="stat-label">${saldo>=0?'A Entregar':'A Recuperar'}</div><div class="stat-value">${fmtEUR(Math.abs(saldo))}</div><div class="stat-sub">Conta ${saldo>=0?'2436':'2437'}</div></div>
+    <div class="stat-card slate"><div class="stat-label">Lançamentos c/ IVA</div><div class="stat-value">${lancs.length}</div><div class="stat-sub">no período</div></div>
+  `;
+}
+
+function registarApuramento() {
+  const de  = document.getElementById('iva-de').value;
+  const ate = document.getElementById('iva-ate').value;
+  const saldo = _liquidado - _dedutivel;
+  DB.addIvaPeriodo(empresaId, {
+    de, ate,
+    liquidado: _liquidado,
+    dedutivel: _dedutivel,
+    saldo,
+    estado: 'apurado',
+  });
+  DB.addLancamento(empresaId, {
+    data: DB.today(),
+    diario: 'OD',
+    documento: `APU-${de?.slice(0,7)||'período'}`,
+    descricao: `Apuramento IVA ${de||''} a ${ate||''}`,
+    contaDebito: saldo>=0?'2433':'2435',
+    contaCredito: saldo>=0?'2435':'2433',
+    valorBase: Math.abs(saldo),
+    taxaIva: 0, valorIva: 0, valorTotal: Math.abs(saldo),
+    estado: 'conferido',
+  });
+  showToast('Lançamento de apuramento registado','success');
+  renderHistorico();
+}
+
+function renderHistorico() {
+  const periodos = DB.getIvaPeriodos(empresaId);
+  const tbody = document.getElementById('tbody-hist');
+  const semEl = document.getElementById('sem-hist');
+  if (periodos.length===0) { tbody.innerHTML=''; semEl.hidden=false; return; }
+  semEl.hidden=true;
+  tbody.innerHTML = periodos.map(p=>`
+    <tr>
+      <td>${fmtDate(p.de)} — ${fmtDate(p.ate)}</td>
+      <td class="amount">${fmtEUR(p.liquidado)}</td>
+      <td class="amount">${fmtEUR(p.dedutivel)}</td>
+      <td class="amount ${p.saldo>=0?'debit':'credit'}" style="font-weight:600">${p.saldo>=0?'Pagar':'Recup.'} ${fmtEUR(Math.abs(p.saldo))}</td>
+      <td>${fmtDate(p.criadoEm)}</td>
+      <td><span class="badge ${p.estado==='submetido'?'badge-green':'badge-gold'}">${p.estado==='submetido'?'✓ Submetido':'Apurado'}</span></td>
+    </tr>`).join('');
+}
+
+function apurarIVA() { calcularApuramento(); showToast('Apuramento calculado com sucesso','success'); }
+
+function gerarSAFT() {
+  const emp   = DB.empresaActiva();
+  const lancs = DB.getLancamentos(empresaId);
+  const hoje  = DB.today();
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<AuditFile xmlns="urn:OECD:StandardAuditFile-Tax:PT_1.04_01">
+  <Header>
+    <AuditFileVersion>1.04_01</AuditFileVersion>
+    <CompanyID>${emp.nif||'000000000'}</CompanyID>
+    <TaxRegistrationNumber>${emp.nif||'000000000'}</TaxRegistrationNumber>
+    <TaxAccountingBasis>F</TaxAccountingBasis>
+    <CompanyName>${emp.nome}</CompanyName>
+    <BusinessName>${emp.nome}</BusinessName>
+    <CompanyAddress><AddressDetail>${emp.morada||''}</AddressDetail><City>Lisboa</City><PostalCode>1000-001</PostalCode><Country>PT</Country></CompanyAddress>
+    <FiscalYear>${emp.exercicio}</FiscalYear>
+    <StartDate>${emp.exercicio}-01-01</StartDate>
+    <EndDate>${emp.exercicio}-12-31</EndDate>
+    <CurrencyCode>EUR</CurrencyCode>
+    <DateCreated>${hoje}</DateCreated>
+    <TaxEntity>Global</TaxEntity>
+    <ProductCompanyTaxID>999999999</ProductCompanyTaxID>
+    <SoftwareCertificateNumber>0</SoftwareCertificateNumber>
+    <ProductID>ContaSNC</ProductID>
+    <ProductVersion>1.0</ProductVersion>
+  </Header>
+  <GeneralLedgerEntries>
+    <NumberOfEntries>${lancs.length}</NumberOfEntries>
+    <TotalDebit>${lancs.reduce((s,l)=>s+(l.valorTotal||l.valorBase||0),0).toFixed(2)}</TotalDebit>
+    <TotalCredit>${lancs.reduce((s,l)=>s+(l.valorTotal||l.valorBase||0),0).toFixed(2)}</TotalCredit>
+    ${lancs.map(l=>`
+    <Journal>
+      <JournalID>${l.diario}</JournalID>
+      <Description>${(l.descricao||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')}</Description>
+      <Transaction>
+        <TransactionID>${hoje.replace(/-/g,'')} ${l.documento||l.id}</TransactionID>
+        <Period>${l.data?.slice(5,7)||'01'}</Period>
+        <TransactionDate>${l.data||hoje}</TransactionDate>
+        <SourceID>ContaSNC</SourceID>
+        <Description>${(l.descricao||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')}</Description>
+        <DocArchivalNumber>${l.documento||l.id}</DocArchivalNumber>
+        <TransactionType>N</TransactionType>
+        <GLPostingDate>${l.data||hoje}</GLPostingDate>
+        <Lines>
+          <DebitLine><RecordID>1</RecordID><AccountID>${l.contaDebito||'999'}</AccountID><SourceDocumentID>${l.documento||''}</SourceDocumentID><Description>${(l.descricao||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')}</Description><DebitAmount>${(l.valorTotal||l.valorBase||0).toFixed(2)}</DebitAmount></DebitLine>
+          <CreditLine><RecordID>2</RecordID><AccountID>${l.contaCredito||'999'}</AccountID><SourceDocumentID>${l.documento||''}</SourceDocumentID><Description>${(l.descricao||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')}</Description><CreditAmount>${(l.valorTotal||l.valorBase||0).toFixed(2)}</CreditAmount></CreditLine>
+        </Lines>
+      </Transaction>
+    </Journal>`).join('')}
+  </GeneralLedgerEntries>
+</AuditFile>`;
+
+  const blob = new Blob([xml], {type:'text/xml'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `SAF-T_${emp.nif||'000000000'}_${hoje.replace(/-/g,'')}.xml`;
+  a.click();
+  showToast('SAF-T(PT) gerado e descarregado','success');
+}
+
+function previewDP() {
+  const saldo = _liquidado - _dedutivel;
+  alert(`DECLARAÇÃO PERIÓDICA IVA\n\n` +
+    `Empresa: ${DB.empresaActiva().nome}\n` +
+    `NIF: ${DB.empresaActiva().nif||'—'}\n\n` +
+    `Campo 06 — IVA Liquidado:  ${fmtEUR(_liquidado)}\n` +
+    `Campo 07 — IVA Dedutível:  ${fmtEUR(_dedutivel)}\n` +
+    `Campo 93 — ${saldo>=0?'A Pagar':'A Recuperar'}:   ${fmtEUR(Math.abs(saldo))}\n\n` +
+    `(Exportação XML para o Portal AT não disponível nesta versão demo)`);
+}
+
+function submeterDP() {
+  const de  = document.getElementById('iva-de').value;
+  const ate = document.getElementById('iva-ate').value;
+  const saldo = _liquidado - _dedutivel;
+  const periodos = DB.getIvaPeriodos(empresaId);
+  if (periodos.length === 0) {
+    showToast('Calcule e registe o apuramento primeiro','danger');
+    return;
+  }
+  // marcar último período como submetido
+  const emp = DB.getEmpresas().find(e=>e.id===empresaId);
+  if (emp && emp.ivaPeriodos.length > 0) {
+    emp.ivaPeriodos[0].estado = 'submetido';
+    // save
+    const todas = DB.getEmpresas();
+    const idx = todas.findIndex(e=>e.id===empresaId);
+    todas[idx] = emp;
+    localStorage.setItem('snc_empresas', JSON.stringify(todas));
+  }
+  showToast('Declaração Periódica marcada como submetida','success');
+  renderHistorico();
+}
+</script>
+</body>
+</html>
