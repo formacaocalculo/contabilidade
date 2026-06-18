@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>ContaSNC — Faturação</title>
+  <link rel="stylesheet" href="style.css"/>
+  <script>(function(){var t=localStorage.getItem("snc_theme")||"light";document.documentElement.setAttribute("data-theme",t);})();</script>
+</head>
+<body>
+<aside class="sidebar" id="sidebar-mount"></aside>
+<div class="main-wrap">
+  <header class="topbar">
+    <div class="topbar-breadcrumb">
+      <a href="index.html" style="color:var(--muted);text-decoration:none">Início</a>
+      <span class="sep">›</span><span class="crumb-current">Faturação</span>
+    </div>
+    <div class="topbar-actions">
+      <div id="empresa-selector"></div>
+      <button class="btn btn-outline btn-sm" onclick="abrirNovoCliente()">+ Cliente</button>
+      <button class="btn btn-gold btn-sm" onclick="abrirNovaFatura()">+ Nova Fatura</button>
+      <div class="avatar" id="avatar-initials">AC</div>
+    </div>
+  </header>
+
+  <main class="page-content">
+    <div class="page-hero">
+      <h1>Faturação — Gestão Comercial</h1>
+      <p>Emita faturas de venda, acompanhe pagamentos e gere o lançamento contabilístico automaticamente no diário de Vendas.</p>
+    </div>
+
+    <div class="stats-grid" id="fat-stats"></div>
+
+    <div class="tabs" id="fat-tabs">
+      <button class="tab-btn" data-tab="tab-faturas">Faturas</button>
+      <button class="tab-btn" data-tab="tab-clientes">Clientes</button>
+    </div>
+
+    <!-- ══ Tab Faturas ══ -->
+    <div class="tab-panel" data-panel="tab-faturas">
+      <div class="card" style="margin-bottom:20px">
+        <div class="card-body" style="padding:16px 20px">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+            <div class="form-group" style="margin:0;flex:1;min-width:160px">
+              <label class="form-label">Pesquisar</label>
+              <input type="text" class="form-input" data-search="tbl-faturas" placeholder="Número, cliente…"/>
+            </div>
+            <div class="form-group" style="margin:0">
+              <label class="form-label">Estado</label>
+              <select class="form-select" id="filtro-fat-estado" onchange="renderFaturas()">
+                <option value="">Todos</option>
+                <option value="rascunho">Rascunho</option>
+                <option value="emitida">Emitida</option>
+                <option value="paga">Paga</option>
+              </select>
+            </div>
+            <div class="form-group" style="margin:0">
+              <label class="form-label">De</label>
+              <input type="date" class="form-input" id="filtro-fat-de" onchange="renderFaturas()"/>
+            </div>
+            <div class="form-group" style="margin:0">
+              <label class="form-label">Até</label>
+              <input type="date" class="form-input" id="filtro-fat-ate" onchange="renderFaturas()"/>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div><h2>Faturas Emitidas</h2><p id="fat-count-label">— faturas</p></div>
+        </div>
+        <table class="data-table" id="tbl-faturas">
+          <thead>
+            <tr><th>Número</th><th>Data</th><th>Cliente</th><th>Vencimento</th><th class="amount">Base</th><th class="amount">IVA</th><th class="amount">Total</th><th>Estado</th><th></th></tr>
+          </thead>
+          <tbody id="tbody-faturas"></tbody>
+        </table>
+        <div id="sem-faturas" hidden style="padding:24px;font-size:13px;color:var(--muted);text-align:center">
+          Sem faturas para os filtros selecionados. <a href="#" onclick="abrirNovaFatura();return false">Criar a primeira →</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ Tab Clientes ══ -->
+    <div class="tab-panel" data-panel="tab-clientes" hidden>
+      <div class="card">
+        <div class="card-header">
+          <div><h2>Clientes</h2><p id="cli-count-label">— clientes</p></div>
+          <button class="btn btn-outline btn-sm" onclick="abrirNovoCliente()">+ Novo Cliente</button>
+        </div>
+        <table class="data-table" id="tbl-clientes">
+          <thead><tr><th>Nome</th><th>NIF</th><th>Email</th><th>Telefone</th><th class="amount">Faturado</th><th></th></tr></thead>
+          <tbody id="tbody-clientes"></tbody>
+        </table>
+        <div id="sem-clientes" hidden style="padding:24px;font-size:13px;color:var(--muted);text-align:center">
+          Sem clientes registados. <a href="#" onclick="abrirNovoCliente();return false">Adicionar o primeiro →</a>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ══ Modal Nova/Editar Fatura ══ -->
+<div id="modal-fatura" class="modal" hidden>
+  <div class="modal-backdrop"></div>
+  <div style="position:relative;background:var(--bg-card);border-radius:12px;padding:32px;width:720px;max-width:96vw;max-height:92vh;overflow-y:auto;box-shadow:var(--shadow-lg)">
+    <h2 id="modal-fat-title" style="font-family:'DM Serif Display',serif;font-size:22px;color:var(--text);margin-bottom:4px">Nova Fatura</h2>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:20px">IVA e totais calculados automaticamente por linha.</p>
+    <input type="hidden" id="edit-fat-id"/>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">N.º Fatura</label>
+        <input class="form-input" id="nf-numero" disabled style="opacity:0.7"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Cliente *</label>
+        <div style="display:flex;gap:6px">
+          <select class="form-select" id="nf-cliente"></select>
+          <button class="btn btn-outline btn-sm" type="button" title="Novo cliente" onclick="abrirNovoCliente(true)">+</button>
+        </div>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Data *</label>
+        <input type="date" class="form-input" id="nf-data"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Data de Vencimento</label>
+        <input type="date" class="form-input" id="nf-vencimento"/>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin:18px 0 8px">
+      <label class="form-label" style="margin:0">Linhas da Fatura</label>
+      <button class="btn btn-outline btn-sm" type="button" onclick="adicionarLinha()">+ Linha</button>
+    </div>
+    <div id="linhas-fatura" style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px"></div>
+
+    <div id="fat-totais" style="background:var(--bg-table-head);border:1px solid var(--border);border-radius:8px;padding:14px 18px;margin:16px 0 18px;display:flex;justify-content:flex-end;gap:28px;font-size:13px">
+      <div><div style="color:var(--muted);font-size:11px">Base</div><div id="ft-base" style="font-weight:600">—</div></div>
+      <div><div style="color:var(--muted);font-size:11px">IVA</div><div id="ft-iva" style="font-weight:600;color:var(--danger)">—</div></div>
+      <div><div style="color:var(--muted);font-size:11px">Total</div><div id="ft-total" style="font-weight:700;color:var(--text);font-size:16px">—</div></div>
+    </div>
+
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn btn-outline" onclick="closeModal('modal-fatura')">Cancelar</button>
+      <button class="btn btn-outline" id="btn-guardar-rascunho" onclick="guardarFatura('rascunho')">Guardar Rascunho</button>
+      <button class="btn btn-gold" onclick="guardarFatura('emitida')">Guardar e Emitir</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ Modal Ver Fatura ══ -->
+<div id="modal-ver-fatura" class="modal" hidden>
+  <div class="modal-backdrop"></div>
+  <div style="position:relative;background:var(--bg-card);border-radius:12px;padding:36px;width:600px;max-width:96vw;max-height:92vh;overflow-y:auto;box-shadow:var(--shadow-lg)" id="ver-fatura-box">
+  </div>
+</div>
+
+<!-- ══ Modal Cliente ══ -->
+<div id="modal-cliente" class="modal" hidden>
+  <div class="modal-backdrop"></div>
+  <div style="position:relative;background:var(--bg-card);border-radius:12px;padding:32px;width:480px;max-width:96vw;box-shadow:var(--shadow-lg)">
+    <h2 id="modal-cli-title" style="font-family:'DM Serif Display',serif;font-size:22px;color:var(--text);margin-bottom:4px">Novo Cliente</h2>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:22px">Dados usados na faturação.</p>
+    <input type="hidden" id="edit-cli-id"/>
+    <input type="hidden" id="cli-volta-fatura"/>
+    <div class="form-group">
+      <label class="form-label">Nome / Designação *</label>
+      <input class="form-input" id="nc2-nome" placeholder="Ex: Cliente ABC, Lda"/>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">NIF</label>
+        <input class="form-input" id="nc2-nif" placeholder="500 000 000"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Telefone</label>
+        <input class="form-input" id="nc2-telefone" placeholder="+351 ..."/>
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Morada</label>
+      <input class="form-input" id="nc2-morada" placeholder="Rua, n.º, Localidade"/>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Email</label>
+      <input type="email" class="form-input" id="nc2-email" placeholder="email@cliente.pt"/>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:8px">
+      <button class="btn btn-outline" onclick="closeModal('modal-cliente')">Cancelar</button>
+      <button class="btn btn-gold" onclick="guardarCliente()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<script src="db.js"></script>
+<script src="_sidebar.js"></script>
+<script src="script.js"></script>
+<script>
+let empresaId, linhaSeq = 0;
+
+document.addEventListener('DOMContentLoaded', () => {
+  renderSidebar('faturacao.html');
+  const emp = DB.empresaActiva();
+  if (!emp) return;
+  empresaId = emp.id;
+  document.getElementById('avatar-initials').textContent = emp.nome.split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase();
+
+  renderStats();
+  renderFaturas();
+  renderClientes();
+});
+
+/* ══════════ Stats ══════════ */
+function renderStats() {
+  const faturas = DB.getFaturas(empresaId);
+  const clientes = DB.getClientes(empresaId);
+  const hoje = new Date();
+  const mesAtual = hoje.toISOString().slice(0,7);
+
+  const faturadoMes = faturas.filter(f => f.estado!=='rascunho' && (f.data||'').startsWith(mesAtual))
+                              .reduce((s,f)=>s+f.valorTotal,0);
+  const pendente = faturas.filter(f => f.estado==='emitida').reduce((s,f)=>s+f.valorTotal,0);
+  const rascunhos = faturas.filter(f => f.estado==='rascunho').length;
+
+  document.getElementById('fat-stats').innerHTML = `
+    <div class="stat-card"><div class="stat-label">Faturado este Mês</div><div class="stat-value">${fmtEUR(faturadoMes)}</div><div class="stat-sub">${mesAtual}</div></div>
+    <div class="stat-card danger"><div class="stat-label">Pendente de Pagamento</div><div class="stat-value">${fmtEUR(pendente)}</div><div class="stat-sub">faturas emitidas</div></div>
+    <div class="stat-card slate"><div class="stat-label">Rascunhos</div><div class="stat-value">${rascunhos}</div><div class="stat-sub">por emitir</div></div>
+    <div class="stat-card green"><div class="stat-label">Clientes</div><div class="stat-value">${clientes.length}</div><div class="stat-sub">registados</div></div>
+  `;
+}
+
+/* ══════════ Faturas ══════════ */
+function renderFaturas() {
+  const fEstado = document.getElementById('filtro-fat-estado').value;
+  const fDe     = document.getElementById('filtro-fat-de').value;
+  const fAte    = document.getElementById('filtro-fat-ate').value;
+
+  let lista = DB.getFaturas(empresaId);
+  if (fEstado) lista = lista.filter(f=>f.estado===fEstado);
+  if (fDe)     lista = lista.filter(f=>f.data>=fDe);
+  if (fAte)    lista = lista.filter(f=>f.data<=fAte);
+
+  document.getElementById('fat-count-label').textContent = `${lista.length} faturas`;
+  const tbody = document.getElementById('tbody-faturas');
+  const semEl = document.getElementById('sem-faturas');
+
+  if (lista.length === 0) { tbody.innerHTML=''; semEl.hidden=false; return; }
+  semEl.hidden = true;
+
+  const clientes = DB.getClientes(empresaId);
+  const estadoBadge = { rascunho:'badge-muted', emitida:'badge-gold', paga:'badge-green' };
+  const estadoLabel = { rascunho:'Rascunho', emitida:'Emitida', paga:'Paga' };
+
+  tbody.innerHTML = lista.map(f => {
+    const cli = clientes.find(c=>c.id===f.clienteId);
+    return `
+    <tr>
+      <td class="mono" style="font-size:12px">${f.numero}</td>
+      <td>${fmtDate(f.data)}</td>
+      <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${cli?cli.nome:'<span style="color:var(--muted)">—</span>'}</td>
+      <td>${f.dataVencimento?fmtDate(f.dataVencimento):'—'}</td>
+      <td class="amount">${fmtEUR(f.valorBase)}</td>
+      <td class="amount">${fmtEUR(f.valorIva)}</td>
+      <td class="amount" style="font-weight:700">${fmtEUR(f.valorTotal)}</td>
+      <td><span class="badge ${estadoBadge[f.estado]}">${estadoLabel[f.estado]}</span></td>
+      <td style="display:flex;gap:4px;justify-content:flex-end">
+        <button class="btn btn-outline btn-sm" title="Ver" onclick="verFatura('${f.id}')">👁</button>
+        ${f.estado==='rascunho'?`<button class="btn btn-outline btn-sm" title="Editar" onclick="editarFatura('${f.id}')">✏</button>`:''}
+        ${f.estado==='emitida'?`<button class="btn btn-sm" style="background:rgba(45,122,79,0.12);color:var(--success);border:1px solid rgba(45,122,79,0.25)" title="Marcar como paga" onclick="pagarFatura('${f.id}')">✓ Paga</button>`:''}
+        ${f.estado==='rascunho'?`<button class="btn btn-sm" style="background:rgba(176,58,46,0.1);color:var(--danger);border:1px solid rgba(176,58,46,0.2)" title="Apagar" onclick="apagarFatura('${f.id}')">✕</button>`:''}
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+let _linhasAtuais = [];
+
+function novaLinhaObj() {
+  linhaSeq++;
+  return { _id: 'l'+linhaSeq, descricao:'', quantidade:1, precoUnit:0, taxaIva:23 };
+}
+
+function renderLinhas() {
+  const wrap = document.getElementById('linhas-fatura');
+  wrap.innerHTML = _linhasAtuais.map((l,idx) => `
+    <div style="display:grid;grid-template-columns:1fr 70px 100px 90px 100px 32px;gap:8px;align-items:center" data-linha="${l._id}">
+      <input class="form-input" placeholder="Descrição do serviço/produto" value="${(l.descricao||'').replace(/"/g,'&quot;')}" oninput="atualizarLinha('${l._id}','descricao',this.value)"/>
+      <input class="form-input" type="number" min="0" step="1" value="${l.quantidade}" oninput="atualizarLinha('${l._id}','quantidade',this.value)" title="Quantidade"/>
+      <input class="form-input" type="number" min="0" step="0.01" value="${l.precoUnit}" oninput="atualizarLinha('${l._id}','precoUnit',this.value)" title="Preço unitário (€)"/>
+      <select class="form-select" onchange="atualizarLinha('${l._id}','taxaIva',this.value)" title="Taxa IVA">
+        <option value="0" ${l.taxaIva==0?'selected':''}>Isento</option>
+        <option value="6" ${l.taxaIva==6?'selected':''}>6%</option>
+        <option value="13" ${l.taxaIva==13?'selected':''}>13%</option>
+        <option value="23" ${l.taxaIva==23?'selected':''}>23%</option>
+      </select>
+      <div style="font-size:13px;font-weight:600;text-align:right;padding-right:4px">${fmtEUR((parseFloat(l.quantidade)||0)*(parseFloat(l.precoUnit)||0)*(1+(parseFloat(l.taxaIva)||0)/100))}</div>
+      <button class="btn btn-sm" style="background:rgba(176,58,46,0.1);color:var(--danger);border:1px solid rgba(176,58,46,0.2);padding:6px 8px" onclick="removerLinha('${l._id}')" title="Remover linha">✕</button>
+    </div>
+  `).join('') || '<p style="font-size:13px;color:var(--muted);text-align:center;padding:12px">Sem linhas. Adicione um produto ou serviço.</p>';
+  atualizarTotaisPreview();
+}
+
+function adicionarLinha() {
+  _linhasAtuais.push(novaLinhaObj());
+  renderLinhas();
+}
+
+function removerLinha(id) {
+  _linhasAtuais = _linhasAtuais.filter(l=>l._id!==id);
+  renderLinhas();
+}
+
+function atualizarLinha(id, campo, valor) {
+  const l = _linhasAtuais.find(x=>x._id===id);
+  if (!l) return;
+  l[campo] = (campo==='descricao') ? valor : (parseFloat(valor)||0);
+  renderLinhas();
+}
+
+function atualizarTotaisPreview() {
+  let base=0, iva=0;
+  _linhasAtuais.forEach(l=>{
+    const sub = (parseFloat(l.quantidade)||0)*(parseFloat(l.precoUnit)||0);
+    base += sub;
+    iva  += sub*(parseFloat(l.taxaIva)||0)/100;
+  });
+  document.getElementById('ft-base').textContent = fmtEUR(base);
+  document.getElementById('ft-iva').textContent  = fmtEUR(iva);
+  document.getElementById('ft-total').textContent= fmtEUR(base+iva);
+}
+
+function popularSelectClientes(selecionado) {
+  const sel = document.getElementById('nf-cliente');
+  const clientes = DB.getClientes(empresaId);
+  sel.innerHTML = clientes.length
+    ? clientes.map(c=>`<option value="${c.id}" ${c.id===selecionado?'selected':''}>${c.nome}${c.nif?' — '+c.nif:''}</option>`).join('')
+    : `<option value="">Sem clientes — clique em "+" para criar</option>`;
+}
+
+function abrirNovaFatura() {
+  document.getElementById('modal-fat-title').textContent = 'Nova Fatura';
+  document.getElementById('edit-fat-id').value = '';
+  document.getElementById('nf-numero').value = DB.proximoNumeroFatura(empresaId);
+  document.getElementById('nf-data').value = DB.today();
+  document.getElementById('nf-vencimento').value = '';
+  popularSelectClientes('');
+  _linhasAtuais = [novaLinhaObj()];
+  renderLinhas();
+  document.getElementById('btn-guardar-rascunho').style.display = '';
+  openModal('modal-fatura');
+}
+
+function editarFatura(id) {
+  const f = DB.getFaturas(empresaId).find(x=>x.id===id);
+  if (!f) return;
+  document.getElementById('modal-fat-title').textContent = 'Editar Fatura (Rascunho)';
+  document.getElementById('edit-fat-id').value = id;
+  document.getElementById('nf-numero').value = f.numero;
+  document.getElementById('nf-data').value = f.data;
+  document.getElementById('nf-vencimento').value = f.dataVencimento||'';
+  popularSelectClientes(f.clienteId);
+  _linhasAtuais = (f.linhas||[]).map(l=>({ ...l, _id: 'l'+(++linhaSeq) }));
+  if (_linhasAtuais.length===0) _linhasAtuais=[novaLinhaObj()];
+  renderLinhas();
+  document.getElementById('btn-guardar-rascunho').style.display = '';
+  openModal('modal-fatura');
+}
+
+function guardarFatura(estadoDestino) {
+  const clienteId = document.getElementById('nf-cliente').value;
+  if (!clienteId) { showToast('Selecione um cliente','danger'); return; }
+  const linhasValidas = _linhasAtuais.filter(l => l.descricao && l.descricao.trim() && (parseFloat(l.precoUnit)||0) >= 0 && (parseFloat(l.quantidade)||0) > 0);
+  if (linhasValidas.length === 0) { showToast('Adicione pelo menos uma linha com descrição, quantidade e preço','danger'); return; }
+
+  const dados = {
+    data:           document.getElementById('nf-data').value || DB.today(),
+    dataVencimento: document.getElementById('nf-vencimento').value,
+    clienteId,
+    linhas:         linhasValidas.map(({_id, ...rest})=>rest),
+  };
+
+  const editId = document.getElementById('edit-fat-id').value;
+  let faturaId = editId;
+
+  if (editId) {
+    DB.editFatura(empresaId, editId, dados);
+    showToast('Fatura atualizada','success');
+  } else {
+    const nova = DB.addFatura(empresaId, dados);
+    faturaId = nova.id;
+    showToast('Fatura guardada como rascunho','success');
+  }
+
+  if (estadoDestino === 'emitida') {
+    const resultado = DB.emitirFatura(empresaId, faturaId);
+    if (resultado) {
+      showToast(`Fatura ${resultado.numero} emitida — lançamento gerado no diário de Vendas`,'success');
+    }
+  }
+
+  closeModal('modal-fatura');
+  renderStats();
+  renderFaturas();
+  renderClientes();
+}
+
+function pagarFatura(id) {
+  const f = DB.marcarFaturaPaga(empresaId, id);
+  if (f) showToast(`Fatura ${f.numero} marcada como paga`,'success');
+  renderStats();
+  renderFaturas();
+}
+
+function apagarFatura(id) {
+  if (!confirm('Apagar este rascunho de fatura? Esta ação não pode ser revertida.')) return;
+  const ok = DB.deleteFatura(empresaId, id);
+  if (ok === false) { showToast('Só é possível apagar faturas em rascunho','danger'); return; }
+  showToast('Rascunho apagado','warning');
+  renderStats();
+  renderFaturas();
+}
+
+function verFatura(id) {
+  const f = DB.getFaturas(empresaId).find(x=>x.id===id);
+  if (!f) return;
+  const cli = DB.getClientes(empresaId).find(c=>c.id===f.clienteId);
+  const emp = DB.empresaActiva();
+  const estadoBadge = { rascunho:'badge-muted', emitida:'badge-gold', paga:'badge-green' };
+  const estadoLabel = { rascunho:'Rascunho', emitida:'Emitida', paga:'Paga' };
+
+  document.getElementById('ver-fatura-box').innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px">
+      <div>
+        <div style="font-family:'DM Serif Display',serif;font-size:24px;color:var(--text)">${f.numero}</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px">Emitido por ${emp.nome} ${emp.nif?'— NIF '+emp.nif:''}</div>
+      </div>
+      <span class="badge ${estadoBadge[f.estado]}" style="font-size:12px">${estadoLabel[f.estado]}</span>
+    </div>
+    <div style="display:flex;gap:32px;margin-bottom:20px;font-size:13px">
+      <div><div style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em">Cliente</div><div style="font-weight:600;margin-top:2px">${cli?cli.nome:'—'}</div>${cli&&cli.nif?`<div style="color:var(--muted);font-size:12px">NIF ${cli.nif}</div>`:''}</div>
+      <div><div style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em">Data</div><div style="font-weight:600;margin-top:2px">${fmtDate(f.data)}</div></div>
+      <div><div style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em">Vencimento</div><div style="font-weight:600;margin-top:2px">${f.dataVencimento?fmtDate(f.dataVencimento):'—'}</div></div>
+    </div>
+    <table class="data-table" style="margin-bottom:16px">
+      <thead><tr><th>Descrição</th><th>Qtd.</th><th class="amount">Preço Unit.</th><th>IVA</th><th class="amount">Subtotal</th></tr></thead>
+      <tbody>
+        ${(f.linhas||[]).map(l=>`
+          <tr>
+            <td>${l.descricao}</td>
+            <td>${l.quantidade}</td>
+            <td class="amount">${fmtEUR(l.precoUnit)}</td>
+            <td>${l.taxaIva}%</td>
+            <td class="amount">${fmtEUR((l.quantidade||0)*(l.precoUnit||0))}</td>
+          </tr>`).join('')}
+      </tbody>
+    </table>
+    <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;font-size:13px;margin-bottom:24px">
+      <div style="display:flex;gap:16px"><span style="color:var(--muted)">Base</span><strong style="min-width:90px;text-align:right">${fmtEUR(f.valorBase)}</strong></div>
+      <div style="display:flex;gap:16px"><span style="color:var(--muted)">IVA</span><strong style="min-width:90px;text-align:right;color:var(--danger)">${fmtEUR(f.valorIva)}</strong></div>
+      <div style="display:flex;gap:16px;font-size:18px"><span style="color:var(--muted);font-size:13px;align-self:center">Total</span><strong style="min-width:90px;text-align:right;font-family:'DM Serif Display',serif">${fmtEUR(f.valorTotal)}</strong></div>
+    </div>
+    ${f.lancamentoId?`<div class="alert alert-info" style="margin-bottom:16px"><span class="alert-icon">📒</span><div>Lançamento gerado no diário de Vendas (documento ${f.numero}).</div></div>`:''}
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn btn-outline" onclick="closeModal('modal-ver-fatura')">Fechar</button>
+      <button class="btn btn-primary" onclick="window.print()">🖨 Imprimir</button>
+    </div>
+  `;
+  openModal('modal-ver-fatura');
+}
+
+/* ══════════ Clientes ══════════ */
+function renderClientes() {
+  const clientes = DB.getClientes(empresaId);
+  const faturas  = DB.getFaturas(empresaId);
+  document.getElementById('cli-count-label').textContent = `${clientes.length} clientes`;
+  const tbody = document.getElementById('tbody-clientes');
+  const semEl = document.getElementById('sem-clientes');
+
+  if (clientes.length === 0) { tbody.innerHTML=''; semEl.hidden=false; return; }
+  semEl.hidden = true;
+
+  tbody.innerHTML = clientes.map(c => {
+    const faturado = faturas.filter(f=>f.clienteId===c.id && f.estado!=='rascunho').reduce((s,f)=>s+f.valorTotal,0);
+    return `
+    <tr>
+      <td style="font-weight:600">${c.nome}</td>
+      <td class="mono" style="font-size:12px">${c.nif||'—'}</td>
+      <td style="font-size:13px">${c.email||'—'}</td>
+      <td style="font-size:13px">${c.telefone||'—'}</td>
+      <td class="amount">${fmtEUR(faturado)}</td>
+      <td style="display:flex;gap:4px;justify-content:flex-end">
+        <button class="btn btn-outline btn-sm" onclick="editarCliente('${c.id}')">✏</button>
+        <button class="btn btn-sm" style="background:rgba(176,58,46,0.1);color:var(--danger);border:1px solid rgba(176,58,46,0.2)" onclick="apagarCliente('${c.id}')">✕</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function abrirNovoCliente(voltarParaFatura) {
+  document.getElementById('modal-cli-title').textContent = 'Novo Cliente';
+  document.getElementById('edit-cli-id').value = '';
+  document.getElementById('cli-volta-fatura').value = voltarParaFatura ? '1' : '';
+  document.getElementById('nc2-nome').value = '';
+  document.getElementById('nc2-nif').value = '';
+  document.getElementById('nc2-telefone').value = '';
+  document.getElementById('nc2-morada').value = '';
+  document.getElementById('nc2-email').value = '';
+  openModal('modal-cliente');
+}
+
+function editarCliente(id) {
+  const c = DB.getClientes(empresaId).find(x=>x.id===id);
+  if (!c) return;
+  document.getElementById('modal-cli-title').textContent = 'Editar Cliente';
+  document.getElementById('edit-cli-id').value = id;
+  document.getElementById('cli-volta-fatura').value = '';
+  document.getElementById('nc2-nome').value = c.nome||'';
+  document.getElementById('nc2-nif').value = c.nif||'';
+  document.getElementById('nc2-telefone').value = c.telefone||'';
+  document.getElementById('nc2-morada').value = c.morada||'';
+  document.getElementById('nc2-email').value = c.email||'';
+  openModal('modal-cliente');
+}
+
+function guardarCliente() {
+  const nome = document.getElementById('nc2-nome').value.trim();
+  if (!nome) { showToast('O nome do cliente é obrigatório','danger'); return; }
+  const dados = {
+    nome,
+    nif:      document.getElementById('nc2-nif').value.trim(),
+    telefone: document.getElementById('nc2-telefone').value.trim(),
+    morada:   document.getElementById('nc2-morada').value.trim(),
+    email:    document.getElementById('nc2-email').value.trim(),
+  };
+  const editId = document.getElementById('edit-cli-id').value;
+  const voltaFatura = document.getElementById('cli-volta-fatura').value === '1';
+  let cliente;
+  if (editId) {
+    DB.editCliente(empresaId, editId, dados);
+    showToast('Cliente atualizado','success');
+    cliente = { id: editId };
+  } else {
+    cliente = DB.addCliente(empresaId, dados);
+    showToast('Cliente criado','success');
+  }
+  closeModal('modal-cliente');
+  renderClientes();
+  renderStats();
+
+  if (voltaFatura && cliente) {
+    popularSelectClientes(cliente.id);
+    openModal('modal-fatura');
+  }
+}
+
+function apagarCliente(id) {
+  if (!confirm('Apagar este cliente?')) return;
+  const ok = DB.deleteCliente(empresaId, id);
+  if (ok === false) { showToast('Não é possível apagar: cliente tem faturas associadas','danger'); return; }
+  showToast('Cliente apagado','warning');
+  renderClientes();
+  renderStats();
+}
+</script>
+</body>
+</html>

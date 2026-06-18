@@ -124,6 +124,8 @@ const DB = (() => {
       diarios:     JSON.parse(JSON.stringify(DIARIOS_PADRAO)),
       lancamentos: [],
       ivaPeriodos: [],
+      clientes:    [],
+      faturas:     [],
     };
     empresas.push(nova);
     saveEmpresas(empresas);
@@ -150,7 +152,12 @@ const DB = (() => {
   // ── Helpers para empresa activa ──────────────────────────
   function _getEmpresa(id) {
     const empresas = getEmpresas();
-    return empresas.find(e => e.id === id);
+    const emp = empresas.find(e => e.id === id);
+    if (emp) {
+      if (!emp.clientes) emp.clientes = [];
+      if (!emp.faturas)  emp.faturas  = [];
+    }
+    return emp;
   }
 
   function _saveEmpresa(empresa) {
@@ -274,6 +281,177 @@ const DB = (() => {
     _saveEmpresa(emp);
   }
 
+  // ── Clientes ─────────────────────────────────────────────
+  function getClientes(empresaId) {
+    return (_getEmpresa(empresaId) || {}).clientes || [];
+  }
+
+  function addCliente(empresaId, cliente) {
+    const emp = _getEmpresa(empresaId);
+    if (!emp) return null;
+    if (!emp.clientes) emp.clientes = [];
+    const novo = {
+      id:        uid(),
+      nome:      cliente.nome || '',
+      nif:       cliente.nif || '',
+      morada:    cliente.morada || '',
+      email:     cliente.email || '',
+      telefone:  cliente.telefone || '',
+      criadoEm:  today(),
+    };
+    emp.clientes.push(novo);
+    _saveEmpresa(emp);
+    return novo;
+  }
+
+  function editCliente(empresaId, id, dados) {
+    const emp = _getEmpresa(empresaId);
+    if (!emp) return;
+    const idx = (emp.clientes||[]).findIndex(c => c.id === id);
+    if (idx !== -1) { emp.clientes[idx] = { ...emp.clientes[idx], ...dados }; _saveEmpresa(emp); }
+  }
+
+  function deleteCliente(empresaId, id) {
+    const emp = _getEmpresa(empresaId);
+    if (!emp) return false;
+    // não eliminar cliente com faturas associadas
+    if ((emp.faturas||[]).some(f => f.clienteId === id)) return false;
+    emp.clientes = (emp.clientes||[]).filter(c => c.id !== id);
+    _saveEmpresa(emp);
+    return true;
+  }
+
+  // ── Faturação (Vendas) ───────────────────────────────────
+  function getFaturas(empresaId) {
+    return (_getEmpresa(empresaId) || {}).faturas || [];
+  }
+
+  function _calcularTotaisFatura(linhas) {
+    let base = 0, iva = 0;
+    (linhas||[]).forEach(l => {
+      const qtd   = parseFloat(l.quantidade) || 0;
+      const preco = parseFloat(l.precoUnit)  || 0;
+      const taxa  = parseFloat(l.taxaIva)    || 0;
+      const subtotal = qtd * preco;
+      base += subtotal;
+      iva  += subtotal * taxa / 100;
+    });
+    return { base, iva, total: base + iva };
+  }
+
+  function proximoNumeroFatura(empresaId) {
+    const emp = _getEmpresa(empresaId);
+    if (!emp) return null;
+    const ano = emp.exercicio || new Date().getFullYear();
+    const doAno = (emp.faturas||[]).filter(f => f.numero && f.numero.startsWith(`FT ${ano}/`));
+    const seq = doAno.length + 1;
+    return `FT ${ano}/${String(seq).padStart(4,'0')}`;
+  }
+
+  function addFatura(empresaId, dados) {
+    const emp = _getEmpresa(empresaId);
+    if (!emp) return null;
+    if (!emp.faturas) emp.faturas = [];
+    const totais = _calcularTotaisFatura(dados.linhas);
+    const nova = {
+      id:             uid(),
+      numero:         dados.numero || proximoNumeroFatura(empresaId),
+      data:           dados.data || today(),
+      dataVencimento: dados.dataVencimento || '',
+      clienteId:      dados.clienteId || '',
+      linhas:         dados.linhas || [],
+      valorBase:      totais.base,
+      valorIva:       totais.iva,
+      valorTotal:     totais.total,
+      estado:         dados.estado || 'rascunho',
+      lancamentoId:   null,
+      criadaEm:       today(),
+    };
+    emp.faturas.unshift(nova);
+    _saveEmpresa(emp);
+    return nova;
+  }
+
+  function editFatura(empresaId, id, dados) {
+    const emp = _getEmpresa(empresaId);
+    if (!emp) return;
+    const idx = (emp.faturas||[]).findIndex(f => f.id === id);
+    if (idx === -1) return;
+    const atual = emp.faturas[idx];
+    const linhas = dados.linhas || atual.linhas;
+    const totais = _calcularTotaisFatura(linhas);
+    emp.faturas[idx] = {
+      ...atual, ...dados,
+      linhas,
+      valorBase:  totais.base,
+      valorIva:   totais.iva,
+      valorTotal: totais.total,
+    };
+    _saveEmpresa(emp);
+  }
+
+  function deleteFatura(empresaId, id) {
+    const emp = _getEmpresa(empresaId);
+    if (!emp) return false;
+    const fat = (emp.faturas||[]).find(f => f.id === id);
+    if (!fat) return false;
+    if (fat.estado !== 'rascunho') return false; // só apaga rascunhos
+    emp.faturas = emp.faturas.filter(f => f.id !== id);
+    _saveEmpresa(emp);
+    return true;
+  }
+
+  // Emite a fatura (rascunho → emitida) e gera o lançamento contabilístico no diário de Vendas
+  function emitirFatura(empresaId, id) {
+    const emp = _getEmpresa(empresaId);
+    if (!emp) return null;
+    const fat = (emp.faturas||[]).find(f => f.id === id);
+    if (!fat || fat.estado !== 'rascunho') return null;
+
+    const cliente = (emp.clientes||[]).find(c => c.id === fat.clienteId);
+    const taxaPredominante = (fat.linhas||[]).reduce((max,l)=> (parseFloat(l.taxaIva)||0) > max ? (parseFloat(l.taxaIva)||0) : max, 0);
+
+    const lanc = {
+      id:           uid(),
+      data:         fat.data,
+      diario:       'V',
+      documento:    fat.numero,
+      descricao:    `Venda — ${cliente ? cliente.nome : 'Cliente'} (${fat.numero})`,
+      contaDebito:  '211',
+      contaCredito: '72',
+      valorBase:    fat.valorBase,
+      taxaIva:      taxaPredominante,
+      valorIva:     fat.valorIva,
+      valorTotal:   fat.valorTotal,
+      retencao:     0,
+      estado:       'pendente',
+      criadoEm:     today(),
+    };
+    emp.lancamentos.unshift(lanc);
+
+    fat.estado = 'emitida';
+    fat.lancamentoId = lanc.id;
+    fat.emitidaEm = today();
+    _saveEmpresa(emp);
+    return fat;
+  }
+
+  function marcarFaturaPaga(empresaId, id) {
+    const emp = _getEmpresa(empresaId);
+    if (!emp) return null;
+    const fat = (emp.faturas||[]).find(f => f.id === id);
+    if (!fat || fat.estado !== 'emitida') return null;
+    fat.estado = 'paga';
+    fat.pagaEm = today();
+    // marcar lançamento associado como conferido
+    if (fat.lancamentoId) {
+      const lanc = emp.lancamentos.find(l => l.id === fat.lancamentoId);
+      if (lanc) lanc.estado = 'conferido';
+    }
+    _saveEmpresa(emp);
+    return fat;
+  }
+
   // ── Estatísticas rápidas ─────────────────────────────────
   function statsEmpresa(empresaId) {
     const emp = _getEmpresa(empresaId);
@@ -323,6 +501,10 @@ const DB = (() => {
     getDiarios, addDiario, editDiario,
     // lançamentos
     getLancamentos, addLancamento, editLancamento, deleteLancamento,
+    // clientes
+    getClientes, addCliente, editCliente, deleteCliente,
+    // faturação
+    getFaturas, addFatura, editFatura, deleteFatura, emitirFatura, marcarFaturaPaga, proximoNumeroFatura,
     // iva
     getIvaPeriodos, addIvaPeriodo,
     // stats
