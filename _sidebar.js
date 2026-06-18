@@ -1,6 +1,6 @@
 // _sidebar.js — sidebar dinâmica com toggle de tema
-function renderSidebar(paginaActiva) {
-  const emp = DB.empresaActiva();
+async function renderSidebar(paginaActiva) {
+  const emp = await DB.empresaActiva();
   const nomeEmp   = emp ? emp.nome    : '—';
   const exercicio = emp ? emp.exercicio : '—';
 
@@ -62,6 +62,8 @@ function renderSidebar(paginaActiva) {
       Exercício <strong style="color:rgba(255,255,255,0.85)">${exercicio}</strong>
       &nbsp;·&nbsp;
       <a href="empresas.html" style="color:var(--gold);font-size:11px;text-decoration:none">trocar</a>
+      &nbsp;·&nbsp;
+      <a href="#" onclick="logout();return false" style="color:rgba(255,255,255,0.45);font-size:11px;text-decoration:none">sair</a>
     </div>
   `;
 }

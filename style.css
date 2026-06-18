@@ -534,6 +534,9 @@ body {
   position: fixed; inset: 0; z-index: 200;
   display: flex; align-items: center; justify-content: center;
 }
+.modal[hidden] {
+  display: none !important;
+}
 .modal-backdrop {
   position: absolute; inset: 0;
   background: rgba(0,0,0,0.4);
@@ -555,4 +558,10 @@ body {
   .page-content { padding: 20px; }
   .two-col, .three-col { grid-template-columns: 1fr; }
   .topbar { padding: 0 16px; }
+}
+/* Garante que botões dentro de modais recebam o clique */
+.modal button {
+    position: relative;
+    z-index: 999;
+    pointer-events: auto;
 }

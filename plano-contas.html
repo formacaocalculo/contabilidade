@@ -100,22 +100,31 @@
   </div>
 </div>
 
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script src="auth-guard.js"></script>
 <script src="db.js"></script>
 <script src="_sidebar.js"></script>
 <script src="script.js"></script>
 <script>
 let empresaId;
 
-document.addEventListener('DOMContentLoaded', () => {
-  renderSidebar('plano-contas.html');
-  const emp = DB.empresaActiva();
+document.addEventListener('DOMContentLoaded', async () => {
+  const user = await window.authReady;
+  if (!user) return;
+
+  await renderSidebar('plano-contas.html');
+  const emp = await DB.empresaActiva();
+  if (!emp) { location.href = 'empresas.html'; return; }
   empresaId = emp.id;
   document.getElementById('avatar-initials').textContent = emp.nome.split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase();
-  renderContas();
+  await renderContas();
 });
 
-function renderContas(filtroClasse='') {
-  const contas = DB.getContas(empresaId);
+async function renderContas(filtroClasse='') {
+  const contas = await DB.getContas(empresaId);
   const filtradas = filtroClasse ? contas.filter(c=>c.codigo.startsWith(filtroClasse)) : contas;
   document.getElementById('total-contas-label').textContent = `${contas.length} contas configuradas`;
 
@@ -146,8 +155,8 @@ function renderContas(filtroClasse='') {
 
 function filtrarClasse(v) { renderContas(v); }
 
-function editarConta(codigo) {
-  const contas = DB.getContas(empresaId);
+async function editarConta(codigo) {
+  const contas = await DB.getContas(empresaId);
   const c = contas.find(x=>x.codigo===codigo);
   if (!c) return;
   document.getElementById('modal-conta-title').textContent = 'Editar Conta';
@@ -160,7 +169,7 @@ function editarConta(codigo) {
   openModal('modal-conta');
 }
 
-function guardarConta() {
+async function guardarConta() {
   const editCodigo = document.getElementById('edit-conta-codigo').value;
   const codigo = document.getElementById('nc-codigo').value.trim();
   const desig  = document.getElementById('nc-designacao').value.trim();
@@ -174,25 +183,25 @@ function guardarConta() {
     movimentos: true,
   };
   if (editCodigo) {
-    DB.editConta(empresaId, editCodigo, dados);
+    await DB.editConta(empresaId, editCodigo, dados);
     showToast('Conta actualizada','success');
   } else {
-    const ok = DB.addConta(empresaId, dados);
+    const ok = await DB.addConta(empresaId, dados);
     if (ok === false) { showToast('Código já existe','danger'); return; }
     showToast(`Conta ${codigo} criada`,'success');
   }
   document.getElementById('edit-conta-codigo').value = '';
   document.getElementById('modal-conta-title').textContent = 'Nova Conta';
   closeModal('modal-conta');
-  renderContas(document.getElementById('filtro-classe').value);
+  await renderContas(document.getElementById('filtro-classe').value);
 }
 
-function apagarConta(codigo) {
+async function apagarConta(codigo) {
   if (!confirm(`Apagar conta ${codigo}? Esta acção não pode ser revertida.`)) return;
-  const ok = DB.deleteConta(empresaId, codigo);
+  const ok = await DB.deleteConta(empresaId, codigo);
   if (ok === false) { showToast('Não é possível apagar contas SNC base','danger'); return; }
   showToast('Conta apagada','warning');
-  renderContas(document.getElementById('filtro-classe').value);
+  await renderContas(document.getElementById('filtro-classe').value);
 }
 </script>
 </body>

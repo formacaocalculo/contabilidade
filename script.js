@@ -3,14 +3,16 @@
 //  Requer db.js carregado antes
 // ============================================================
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   initTheme();          // ← primeiro, para não haver flash
-  guardarEmpresaActiva();
+  const user = await window.authReady;
+  if (!user) return;    // auth-guard já está a redirecionar para login
+  await guardarEmpresaActiva();
   initNav();
   initTabs();
   initTableSearch();
   initToasts();
-  renderEmpresaSelector();
+  await renderEmpresaSelector();
 });
 
 /* ══════════════════════════════════════════
@@ -50,19 +52,20 @@ function toggleTheme() {
 }
 
 /* ── Protecção: redirige para empresas se não há activa ── */
-function guardarEmpresaActiva() {
+async function guardarEmpresaActiva() {
   const pagina = location.pathname.split('/').pop() || 'index.html';
   if (['empresas.html', ''].includes(pagina)) return;
-  if (!DB.empresaActiva()) location.href = 'empresas.html';
+  const emp = await DB.empresaActiva();
+  if (!emp) location.href = 'empresas.html';
 }
 
 /* ── Selector de empresa no topbar ── */
-function renderEmpresaSelector() {
+async function renderEmpresaSelector() {
   const el = document.getElementById('empresa-selector');
   if (!el) return;
-  const emp = DB.empresaActiva();
+  const emp = await DB.empresaActiva();
   if (!emp) return;
-  const empresas = DB.getEmpresas();
+  const empresas = await DB.getEmpresas();
   el.innerHTML = `
     <div style="position:relative;display:inline-block" id="emp-dropdown-wrap">
       <button onclick="toggleEmpDropdown()" style="

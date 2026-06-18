@@ -1,0 +1,32 @@
+// ============================================================
+//  REGRAS DE SEGURANÇA DO FIRESTORE — ContaSNC
+//
+//  Como aplicar:
+//  1. Vai à Firebase Console → o teu projeto
+//  2. Build → Firestore Database → separador "Regras"
+//  3. Substitui todo o conteúdo por este texto
+//  4. Clica em "Publicar"
+//
+//  O que isto garante:
+//  Cada utilizador autenticado só pode ler/escrever os dados
+//  dentro do seu próprio "users/{uid}/...". Ninguém consegue
+//  ver ou alterar dados de outro utilizador, mesmo conhecendo o
+//  ID do documento.
+// ============================================================
+
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Tudo dentro de users/{userId}/** só é acessível pelo próprio utilizador autenticado
+    match /users/{userId}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Por segurança, qualquer outro caminho não previsto é bloqueado por omissão
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

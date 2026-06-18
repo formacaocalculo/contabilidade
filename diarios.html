@@ -75,6 +75,11 @@
   </div>
 </div>
 
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script src="auth-guard.js"></script>
 <script src="db.js"></script>
 <script src="_sidebar.js"></script>
 <script src="script.js"></script>
@@ -82,19 +87,22 @@
 let empresaId;
 const DIARIO_EMOJIS = {Compras:'🛒',Vendas:'🏷️',Bancos:'🏦',Caixa:'💰','Operações Diversas':'📝',Salários:'👥',Outro:'📋'};
 
-document.addEventListener('DOMContentLoaded', () => {
-  renderSidebar('diarios.html');
-  const emp = DB.empresaActiva();
+document.addEventListener('DOMContentLoaded', async () => {
+  const user = await window.authReady;
+  if (!user) return;
+
+  await renderSidebar('diarios.html');
+  const emp = await DB.empresaActiva();
+  if (!emp) { location.href = 'empresas.html'; return; }
   empresaId = emp.id;
   document.getElementById('avatar-initials').textContent = emp.nome.split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase();
-  renderDiarios();
-  renderUltimos();
+  await renderDiarios();
+  await renderUltimos();
 });
 
-function renderDiarios() {
-  const diarios  = DB.getDiarios(empresaId);
-  const lancs    = DB.getLancamentos(empresaId);
-  const grid     = document.getElementById('diarios-grid');
+async function renderDiarios() {
+  const [diarios, lancs] = await Promise.all([ DB.getDiarios(empresaId), DB.getLancamentos(empresaId) ]);
+  const grid = document.getElementById('diarios-grid');
 
   const cards = diarios.map(d => {
     const dLancs = lancs.filter(l=>l.diario===d.codigo);
@@ -135,8 +143,8 @@ function renderDiarios() {
     </div>`;
 }
 
-function renderUltimos() {
-  const lancs = DB.getLancamentos(empresaId).slice(0,8);
+async function renderUltimos() {
+  const lancs = (await DB.getLancamentos(empresaId)).slice(0,8);
   const tbody = document.getElementById('tbody-ultimos');
   const semEl = document.getElementById('sem-lancamentos');
   if (lancs.length === 0) { tbody.innerHTML=''; semEl.hidden=false; return; }
@@ -152,8 +160,9 @@ function renderUltimos() {
     </tr>`).join('');
 }
 
-function editarDiario(codigo) {
-  const d = DB.getDiarios(empresaId).find(x=>x.codigo===codigo);
+async function editarDiario(codigo) {
+  const diarios = await DB.getDiarios(empresaId);
+  const d = diarios.find(x=>x.codigo===codigo);
   if (!d) return;
   document.getElementById('modal-diario-title').textContent = 'Editar Diário';
   document.getElementById('edit-diario-codigo').value = codigo;
@@ -163,23 +172,23 @@ function editarDiario(codigo) {
   openModal('modal-diario');
 }
 
-function guardarDiario() {
+async function guardarDiario() {
   const editCod = document.getElementById('edit-diario-codigo').value;
   const codigo  = document.getElementById('nd-codigo').value.trim().toUpperCase();
   const nome    = document.getElementById('nd-nome').value.trim();
   if (!codigo || !nome) { showToast('Código e nome são obrigatórios','danger'); return; }
   const dados = { codigo, nome, tipo: document.getElementById('nd-tipo').value, ativo:true };
   if (editCod) {
-    DB.editDiario(empresaId, editCod, dados);
+    await DB.editDiario(empresaId, editCod, dados);
     showToast('Diário actualizado','success');
   } else {
-    const ok = DB.addDiario(empresaId, dados);
+    const ok = await DB.addDiario(empresaId, dados);
     if (ok === false) { showToast('Código de diário já existe','danger'); return; }
     showToast(`Diário ${nome} criado`,'success');
   }
   document.getElementById('edit-diario-codigo').value = '';
   closeModal('modal-diario');
-  renderDiarios();
+  await renderDiarios();
 }
 </script>
 </body>

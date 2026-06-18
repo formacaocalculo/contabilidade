@@ -146,15 +146,24 @@
   </main>
 </div>
 
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script src="auth-guard.js"></script>
 <script src="db.js"></script>
 <script src="_sidebar.js"></script>
 <script src="script.js"></script>
 <script>
 let empresaId, _liquidado=0, _dedutivel=0;
 
-document.addEventListener('DOMContentLoaded', () => {
-  renderSidebar('iva.html');
-  const emp = DB.empresaActiva();
+document.addEventListener('DOMContentLoaded', async () => {
+  const user = await window.authReady;
+  if (!user) return;
+
+  await renderSidebar('iva.html');
+  const emp = await DB.empresaActiva();
+  if (!emp) { location.href = 'empresas.html'; return; }
   empresaId = emp.id;
   document.getElementById('avatar-initials').textContent = emp.nome.split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase();
   document.getElementById('saft-empresa').textContent = emp.nome;
@@ -166,20 +175,21 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('iva-de').value  = `${y}-${m}-01`;
   document.getElementById('iva-ate').value = new Date(y, hoje.getMonth()+1, 0).toISOString().slice(0,10);
 
-  calcularApuramento();
-  renderHistorico();
+  await calcularApuramento();
+  await renderHistorico();
 });
 
-function calcularApuramento() {
+async function calcularApuramento() {
   const de  = document.getElementById('iva-de').value;
   const ate = document.getElementById('iva-ate').value;
-  const lancs = DB.getLancamentos(empresaId).filter(l=>{
+  const todosLancs = await DB.getLancamentos(empresaId);
+  const lancs = todosLancs.filter(l=>{
     if (de  && l.data < de)  return false;
     if (ate && l.data > ate) return false;
     return l.taxaIva > 0;
   });
 
-  document.getElementById('saft-lancs').textContent = DB.getLancamentos(empresaId).length;
+  document.getElementById('saft-lancs').textContent = todosLancs.length;
   document.getElementById('iva-periodo-label').textContent = de && ate ? `${fmtDate(de)} — ${fmtDate(ate)}` : 'Todos os períodos';
 
   // liquidado (vendas)
@@ -234,18 +244,18 @@ function calcularApuramento() {
   `;
 }
 
-function registarApuramento() {
+async function registarApuramento() {
   const de  = document.getElementById('iva-de').value;
   const ate = document.getElementById('iva-ate').value;
   const saldo = _liquidado - _dedutivel;
-  DB.addIvaPeriodo(empresaId, {
+  await DB.addIvaPeriodo(empresaId, {
     de, ate,
     liquidado: _liquidado,
     dedutivel: _dedutivel,
     saldo,
     estado: 'apurado',
   });
-  DB.addLancamento(empresaId, {
+  await DB.addLancamento(empresaId, {
     data: DB.today(),
     diario: 'OD',
     documento: `APU-${de?.slice(0,7)||'período'}`,
@@ -257,11 +267,11 @@ function registarApuramento() {
     estado: 'conferido',
   });
   showToast('Lançamento de apuramento registado','success');
-  renderHistorico();
+  await renderHistorico();
 }
 
-function renderHistorico() {
-  const periodos = DB.getIvaPeriodos(empresaId);
+async function renderHistorico() {
+  const periodos = await DB.getIvaPeriodos(empresaId);
   const tbody = document.getElementById('tbody-hist');
   const semEl = document.getElementById('sem-hist');
   if (periodos.length===0) { tbody.innerHTML=''; semEl.hidden=false; return; }
@@ -277,11 +287,11 @@ function renderHistorico() {
     </tr>`).join('');
 }
 
-function apurarIVA() { calcularApuramento(); showToast('Apuramento calculado com sucesso','success'); }
+async function apurarIVA() { await calcularApuramento(); showToast('Apuramento calculado com sucesso','success'); }
 
-function gerarSAFT() {
-  const emp   = DB.empresaActiva();
-  const lancs = DB.getLancamentos(empresaId);
+async function gerarSAFT() {
+  const emp   = await DB.empresaActiva();
+  const lancs = await DB.getLancamentos(empresaId);
   const hoje  = DB.today();
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <AuditFile xmlns="urn:OECD:StandardAuditFile-Tax:PT_1.04_01">
@@ -340,36 +350,27 @@ function gerarSAFT() {
 
 function previewDP() {
   const saldo = _liquidado - _dedutivel;
-  alert(`DECLARAÇÃO PERIÓDICA IVA\n\n` +
-    `Empresa: ${DB.empresaActiva().nome}\n` +
-    `NIF: ${DB.empresaActiva().nif||'—'}\n\n` +
-    `Campo 06 — IVA Liquidado:  ${fmtEUR(_liquidado)}\n` +
-    `Campo 07 — IVA Dedutível:  ${fmtEUR(_dedutivel)}\n` +
-    `Campo 93 — ${saldo>=0?'A Pagar':'A Recuperar'}:   ${fmtEUR(Math.abs(saldo))}\n\n` +
-    `(Exportação XML para o Portal AT não disponível nesta versão demo)`);
+  DB.empresaActiva().then(emp => {
+    alert(`DECLARAÇÃO PERIÓDICA IVA\n\n` +
+      `Empresa: ${emp.nome}\n` +
+      `NIF: ${emp.nif||'—'}\n\n` +
+      `Campo 06 — IVA Liquidado:  ${fmtEUR(_liquidado)}\n` +
+      `Campo 07 — IVA Dedutível:  ${fmtEUR(_dedutivel)}\n` +
+      `Campo 93 — ${saldo>=0?'A Pagar':'A Recuperar'}:   ${fmtEUR(Math.abs(saldo))}\n\n` +
+      `(Exportação XML para o Portal AT não disponível nesta versão demo)`);
+  });
 }
 
-function submeterDP() {
-  const de  = document.getElementById('iva-de').value;
-  const ate = document.getElementById('iva-ate').value;
-  const saldo = _liquidado - _dedutivel;
-  const periodos = DB.getIvaPeriodos(empresaId);
+async function submeterDP() {
+  const periodos = await DB.getIvaPeriodos(empresaId);
   if (periodos.length === 0) {
     showToast('Calcule e registe o apuramento primeiro','danger');
     return;
   }
-  // marcar último período como submetido
-  const emp = DB.getEmpresas().find(e=>e.id===empresaId);
-  if (emp && emp.ivaPeriodos.length > 0) {
-    emp.ivaPeriodos[0].estado = 'submetido';
-    // save
-    const todas = DB.getEmpresas();
-    const idx = todas.findIndex(e=>e.id===empresaId);
-    todas[idx] = emp;
-    localStorage.setItem('snc_empresas', JSON.stringify(todas));
-  }
+  // o primeiro da lista é o mais recente (ordenado por criadoEm desc)
+  await DB.marcarIvaPeriodoSubmetido(empresaId, periodos[0].id);
   showToast('Declaração Periódica marcada como submetida','success');
-  renderHistorico();
+  await renderHistorico();
 }
 </script>
 </body>

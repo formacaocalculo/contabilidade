@@ -1,13 +1,25 @@
 // ============================================================
-//  db.js — Motor de dados localStorage
-//  Todas as páginas importam este ficheiro antes de script.js
+//  db.js — Motor de dados Firestore
+//  Substitui a versão anterior baseada em localStorage.
+//  Todas as funções são agora ASSÍNCRONAS (retornam Promises).
+//  Todas as páginas que usam DB.* precisam de "await".
+//
+//  Estrutura no Firestore:
+//  users/{uid}/empresas/{empresaId}
+//  users/{uid}/empresas/{empresaId}/planoContas/{contaId}
+//  users/{uid}/empresas/{empresaId}/diarios/{diarioId}
+//  users/{uid}/empresas/{empresaId}/lancamentos/{lancId}
+//  users/{uid}/empresas/{empresaId}/clientes/{clienteId}
+//  users/{uid}/empresas/{empresaId}/faturas/{faturaId}
+//  users/{uid}/empresas/{empresaId}/ivaPeriodos/{periodoId}
+//
+//  Requer: firebase-config.js (expõe `auth` e `db`) e auth-guard.js
+//  (expõe `window.authReady`) carregados ANTES deste ficheiro.
 // ============================================================
 
 const DB = (() => {
 
-  // ── Chaves base ──────────────────────────────────────────
-  const EMPRESAS_KEY = 'snc_empresas';
-  const ACTIVE_KEY   = 'snc_empresa_activa';
+  const ACTIVE_KEY = 'snc_empresa_activa'; // guardamos só o ID activo localmente (não é dado sensível)
 
   // ── Plano de Contas SNC padrão ───────────────────────────
   const PLANO_PADRAO = [
@@ -91,151 +103,168 @@ const DB = (() => {
     return new Date().toISOString().slice(0, 10);
   }
 
-  // ── Empresas ─────────────────────────────────────────────
-  function getEmpresas() {
-    try { return JSON.parse(localStorage.getItem(EMPRESAS_KEY)) || []; }
-    catch { return []; }
+  async function _uidUtilizador() {
+    await window.authReady;
+    const user = auth.currentUser;
+    if (!user) throw new Error('Utilizador não autenticado.');
+    return user.uid;
   }
 
-  function saveEmpresas(list) {
-    localStorage.setItem(EMPRESAS_KEY, JSON.stringify(list));
+  // referências de coleção/documento
+  async function _empresasCol() {
+    const u = await _uidUtilizador();
+    return db.collection('users').doc(u).collection('empresas');
+  }
+  async function _empresaDoc(empresaId) {
+    const col = await _empresasCol();
+    return col.doc(empresaId);
+  }
+  async function _subCol(empresaId, nome) {
+    const doc = await _empresaDoc(empresaId);
+    return doc.collection(nome);
+  }
+
+  async function _getAllDocs(colRef, orderField, desc) {
+    let q = colRef;
+    if (orderField) q = q.orderBy(orderField, desc ? 'desc' : 'asc');
+    const snap = await q.get();
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  }
+
+  // ── Empresas ─────────────────────────────────────────────
+  async function getEmpresas() {
+    const col = await _empresasCol();
+    return _getAllDocs(col, 'criadaEm');
   }
 
   function getEmpresaActiva() {
-    const id = localStorage.getItem(ACTIVE_KEY);
-    return getEmpresas().find(e => e.id === id) || null;
+    // síncrono de propósito: é só o ID, guardado localmente para conveniência de navegação
+    return localStorage.getItem(ACTIVE_KEY);
   }
 
   function setEmpresaActiva(id) {
     localStorage.setItem(ACTIVE_KEY, id);
   }
 
-  function criarEmpresa(dados) {
-    const empresas = getEmpresas();
+  // Devolve o objecto completo da empresa activa (id + dados base). Não inclui subcoleções.
+  async function empresaActiva() {
+    const id = localStorage.getItem(ACTIVE_KEY);
+    if (!id) return null;
+    const docRef = await _empresaDoc(id);
+    const snap = await docRef.get();
+    if (!snap.exists) return null;
+    return { id: snap.id, ...snap.data() };
+  }
+
+  // alias usado por algumas páginas (mesma coisa que empresaActiva)
+  async function getEmpresaActivaObj() {
+    return empresaActiva();
+  }
+
+  async function criarEmpresa(dados) {
+    const col = await _empresasCol();
+    const novaRef = col.doc(); // gera ID
     const nova = {
-      id:         uid(),
       nome:       dados.nome,
       nif:        dados.nif    || '',
       morada:     dados.morada || '',
       exercicio:  dados.exercicio || new Date().getFullYear(),
       regime:     dados.regime || 'mensal',
       criadaEm:   today(),
-      planoContas: JSON.parse(JSON.stringify(PLANO_PADRAO)),
-      diarios:     JSON.parse(JSON.stringify(DIARIOS_PADRAO)),
-      lancamentos: [],
-      ivaPeriodos: [],
-      clientes:    [],
-      faturas:     [],
     };
-    empresas.push(nova);
-    saveEmpresas(empresas);
-    return nova;
+    await novaRef.set(nova);
+
+    // popular plano de contas e diários padrão (em lote)
+    const batch = db.batch();
+    const planoCol  = novaRef.collection('planoContas');
+    const diariosCol= novaRef.collection('diarios');
+    PLANO_PADRAO.forEach(c => batch.set(planoCol.doc(c.codigo), c));
+    DIARIOS_PADRAO.forEach(d => batch.set(diariosCol.doc(d.codigo), d));
+    await batch.commit();
+
+    return { id: novaRef.id, ...nova };
   }
 
-  function editarEmpresa(id, dados) {
-    const empresas = getEmpresas();
-    const idx = empresas.findIndex(e => e.id === id);
-    if (idx === -1) return null;
-    empresas[idx] = { ...empresas[idx], ...dados };
-    saveEmpresas(empresas);
-    return empresas[idx];
+  async function editarEmpresa(id, dados) {
+    const docRef = await _empresaDoc(id);
+    await docRef.update(dados);
+    const snap = await docRef.get();
+    return { id: snap.id, ...snap.data() };
   }
 
-  function eliminarEmpresa(id) {
-    let empresas = getEmpresas().filter(e => e.id !== id);
-    saveEmpresas(empresas);
+  async function eliminarEmpresa(id) {
+    const docRef = await _empresaDoc(id);
+    // eliminar subcoleções primeiro (Firestore não apaga em cascata)
+    const subcolecoes = ['planoContas','diarios','lancamentos','clientes','faturas','ivaPeriodos'];
+    for (const nome of subcolecoes) {
+      const col = docRef.collection(nome);
+      const snap = await col.get();
+      const batch = db.batch();
+      snap.docs.forEach(d => batch.delete(d.ref));
+      if (snap.docs.length) await batch.commit();
+    }
+    await docRef.delete();
     if (localStorage.getItem(ACTIVE_KEY) === id) {
       localStorage.removeItem(ACTIVE_KEY);
     }
   }
 
-  // ── Helpers para empresa activa ──────────────────────────
-  function _getEmpresa(id) {
-    const empresas = getEmpresas();
-    const emp = empresas.find(e => e.id === id);
-    if (emp) {
-      if (!emp.clientes) emp.clientes = [];
-      if (!emp.faturas)  emp.faturas  = [];
-    }
-    return emp;
-  }
-
-  function _saveEmpresa(empresa) {
-    const empresas = getEmpresas();
-    const idx = empresas.findIndex(e => e.id === empresa.id);
-    if (idx !== -1) { empresas[idx] = empresa; saveEmpresas(empresas); }
-  }
-
-  function empresaActiva() {
-    const id = localStorage.getItem(ACTIVE_KEY);
-    if (!id) return null;
-    return _getEmpresa(id) || null;
-  }
-
   // ── Plano de Contas ──────────────────────────────────────
-  function getContas(empresaId) {
-    return (_getEmpresa(empresaId) || {}).planoContas || [];
+  async function getContas(empresaId) {
+    const col = await _subCol(empresaId, 'planoContas');
+    const docs = await _getAllDocs(col);
+    return docs.sort((a,b) => a.codigo.localeCompare(b.codigo, undefined, {numeric:true}));
   }
 
-  function addConta(empresaId, conta) {
-    const emp = _getEmpresa(empresaId);
-    if (!emp) return;
-    // não duplicar código
-    if (emp.planoContas.find(c => c.codigo === conta.codigo)) return false;
-    emp.planoContas.push({ ...conta, criadaEm: today(), personalizada: true });
-    emp.planoContas.sort((a, b) => a.codigo.localeCompare(b.codigo, undefined, {numeric:true}));
-    _saveEmpresa(emp);
+  async function addConta(empresaId, conta) {
+    const col = await _subCol(empresaId, 'planoContas');
+    const existente = await col.doc(conta.codigo).get();
+    if (existente.exists) return false; // não duplicar código
+    await col.doc(conta.codigo).set({ ...conta, criadaEm: today(), personalizada: true });
     return true;
   }
 
-  function editConta(empresaId, codigo, dados) {
-    const emp = _getEmpresa(empresaId);
-    if (!emp) return;
-    const idx = emp.planoContas.findIndex(c => c.codigo === codigo);
-    if (idx !== -1) { emp.planoContas[idx] = { ...emp.planoContas[idx], ...dados }; _saveEmpresa(emp); }
+  async function editConta(empresaId, codigo, dados) {
+    const col = await _subCol(empresaId, 'planoContas');
+    await col.doc(codigo).update(dados);
   }
 
-  function deleteConta(empresaId, codigo) {
-    const emp = _getEmpresa(empresaId);
-    if (!emp) return;
-    const conta = emp.planoContas.find(c => c.codigo === codigo);
-    if (!conta || !conta.personalizada) return false; // não apaga contas SNC base
-    emp.planoContas = emp.planoContas.filter(c => c.codigo !== codigo);
-    _saveEmpresa(emp);
+  async function deleteConta(empresaId, codigo) {
+    const col = await _subCol(empresaId, 'planoContas');
+    const snap = await col.doc(codigo).get();
+    if (!snap.exists || !snap.data().personalizada) return false; // não apaga contas SNC base
+    await col.doc(codigo).delete();
     return true;
   }
 
   // ── Diários ──────────────────────────────────────────────
-  function getDiarios(empresaId) {
-    return (_getEmpresa(empresaId) || {}).diarios || [];
+  async function getDiarios(empresaId) {
+    const col = await _subCol(empresaId, 'diarios');
+    return _getAllDocs(col);
   }
 
-  function addDiario(empresaId, diario) {
-    const emp = _getEmpresa(empresaId);
-    if (!emp) return;
-    if (emp.diarios.find(d => d.codigo === diario.codigo)) return false;
-    emp.diarios.push({ ...diario, criadoEm: today() });
-    _saveEmpresa(emp);
+  async function addDiario(empresaId, diario) {
+    const col = await _subCol(empresaId, 'diarios');
+    const existente = await col.doc(diario.codigo).get();
+    if (existente.exists) return false;
+    await col.doc(diario.codigo).set({ ...diario, criadoEm: today() });
     return true;
   }
 
-  function editDiario(empresaId, codigo, dados) {
-    const emp = _getEmpresa(empresaId);
-    if (!emp) return;
-    const idx = emp.diarios.findIndex(d => d.codigo === codigo);
-    if (idx !== -1) { emp.diarios[idx] = { ...emp.diarios[idx], ...dados }; _saveEmpresa(emp); }
+  async function editDiario(empresaId, codigo, dados) {
+    const col = await _subCol(empresaId, 'diarios');
+    await col.doc(codigo).update(dados);
   }
 
   // ── Lançamentos ──────────────────────────────────────────
-  function getLancamentos(empresaId) {
-    return (_getEmpresa(empresaId) || {}).lancamentos || [];
+  async function getLancamentos(empresaId) {
+    const col = await _subCol(empresaId, 'lancamentos');
+    return _getAllDocs(col, 'data', true);
   }
 
-  function addLancamento(empresaId, lanc) {
-    const emp = _getEmpresa(empresaId);
-    if (!emp) return null;
+  async function addLancamento(empresaId, lanc) {
+    const col = await _subCol(empresaId, 'lancamentos');
     const novo = {
-      id:          uid(),
       data:        lanc.data        || today(),
       diario:      lanc.diario      || '',
       documento:   lanc.documento   || '',
@@ -250,48 +279,29 @@ const DB = (() => {
       estado:      lanc.estado || 'pendente',
       criadoEm:    today(),
     };
-    emp.lancamentos.unshift(novo);
-    _saveEmpresa(emp);
-    return novo;
+    const ref = await col.add(novo);
+    return { id: ref.id, ...novo };
   }
 
-  function editLancamento(empresaId, id, dados) {
-    const emp = _getEmpresa(empresaId);
-    if (!emp) return;
-    const idx = emp.lancamentos.findIndex(l => l.id === id);
-    if (idx !== -1) { emp.lancamentos[idx] = { ...emp.lancamentos[idx], ...dados }; _saveEmpresa(emp); }
+  async function editLancamento(empresaId, id, dados) {
+    const col = await _subCol(empresaId, 'lancamentos');
+    await col.doc(id).update(dados);
   }
 
-  function deleteLancamento(empresaId, id) {
-    const emp = _getEmpresa(empresaId);
-    if (!emp) return;
-    emp.lancamentos = emp.lancamentos.filter(l => l.id !== id);
-    _saveEmpresa(emp);
-  }
-
-  // ── IVA Períodos ─────────────────────────────────────────
-  function getIvaPeriodos(empresaId) {
-    return (_getEmpresa(empresaId) || {}).ivaPeriodos || [];
-  }
-
-  function addIvaPeriodo(empresaId, periodo) {
-    const emp = _getEmpresa(empresaId);
-    if (!emp) return;
-    emp.ivaPeriodos.unshift({ id: uid(), criadoEm: today(), ...periodo });
-    _saveEmpresa(emp);
+  async function deleteLancamento(empresaId, id) {
+    const col = await _subCol(empresaId, 'lancamentos');
+    await col.doc(id).delete();
   }
 
   // ── Clientes ─────────────────────────────────────────────
-  function getClientes(empresaId) {
-    return (_getEmpresa(empresaId) || {}).clientes || [];
+  async function getClientes(empresaId) {
+    const col = await _subCol(empresaId, 'clientes');
+    return _getAllDocs(col, 'criadoEm');
   }
 
-  function addCliente(empresaId, cliente) {
-    const emp = _getEmpresa(empresaId);
-    if (!emp) return null;
-    if (!emp.clientes) emp.clientes = [];
+  async function addCliente(empresaId, cliente) {
+    const col = await _subCol(empresaId, 'clientes');
     const novo = {
-      id:        uid(),
       nome:      cliente.nome || '',
       nif:       cliente.nif || '',
       morada:    cliente.morada || '',
@@ -299,33 +309,25 @@ const DB = (() => {
       telefone:  cliente.telefone || '',
       criadoEm:  today(),
     };
-    emp.clientes.push(novo);
-    _saveEmpresa(emp);
-    return novo;
+    const ref = await col.add(novo);
+    return { id: ref.id, ...novo };
   }
 
-  function editCliente(empresaId, id, dados) {
-    const emp = _getEmpresa(empresaId);
-    if (!emp) return;
-    const idx = (emp.clientes||[]).findIndex(c => c.id === id);
-    if (idx !== -1) { emp.clientes[idx] = { ...emp.clientes[idx], ...dados }; _saveEmpresa(emp); }
+  async function editCliente(empresaId, id, dados) {
+    const col = await _subCol(empresaId, 'clientes');
+    await col.doc(id).update(dados);
   }
 
-  function deleteCliente(empresaId, id) {
-    const emp = _getEmpresa(empresaId);
-    if (!emp) return false;
-    // não eliminar cliente com faturas associadas
-    if ((emp.faturas||[]).some(f => f.clienteId === id)) return false;
-    emp.clientes = (emp.clientes||[]).filter(c => c.id !== id);
-    _saveEmpresa(emp);
+  async function deleteCliente(empresaId, id) {
+    const colFat = await _subCol(empresaId, 'faturas');
+    const snapFat = await colFat.where('clienteId', '==', id).limit(1).get();
+    if (!snapFat.empty) return false; // não eliminar cliente com faturas associadas
+    const col = await _subCol(empresaId, 'clientes');
+    await col.doc(id).delete();
     return true;
   }
 
   // ── Faturação (Vendas) ───────────────────────────────────
-  function getFaturas(empresaId) {
-    return (_getEmpresa(empresaId) || {}).faturas || [];
-  }
-
   function _calcularTotaisFatura(linhas) {
     let base = 0, iva = 0;
     (linhas||[]).forEach(l => {
@@ -339,23 +341,33 @@ const DB = (() => {
     return { base, iva, total: base + iva };
   }
 
-  function proximoNumeroFatura(empresaId) {
-    const emp = _getEmpresa(empresaId);
-    if (!emp) return null;
-    const ano = emp.exercicio || new Date().getFullYear();
-    const doAno = (emp.faturas||[]).filter(f => f.numero && f.numero.startsWith(`FT ${ano}/`));
-    const seq = doAno.length + 1;
-    return `FT ${ano}/${String(seq).padStart(4,'0')}`;
+  async function getFaturas(empresaId) {
+    const col = await _subCol(empresaId, 'faturas');
+    return _getAllDocs(col, 'criadaEm', true);
   }
 
-  function addFatura(empresaId, dados) {
-    const emp = _getEmpresa(empresaId);
-    if (!emp) return null;
-    if (!emp.faturas) emp.faturas = [];
+  async function proximoNumeroFatura(empresaId) {
+    const emp = await empresaActivaPorId(empresaId);
+    const ano = (emp && emp.exercicio) || new Date().getFullYear();
+    const col = await _subCol(empresaId, 'faturas');
+    const prefixo = `FT ${ano}/`;
+    const snap = await col.where('numero', '>=', prefixo).where('numero', '<', prefixo + '\uf8ff').get();
+    const seq = snap.size + 1;
+    return `${prefixo}${String(seq).padStart(4,'0')}`;
+  }
+
+  async function empresaActivaPorId(empresaId) {
+    const docRef = await _empresaDoc(empresaId);
+    const snap = await docRef.get();
+    return snap.exists ? { id: snap.id, ...snap.data() } : null;
+  }
+
+  async function addFatura(empresaId, dados) {
+    const col = await _subCol(empresaId, 'faturas');
     const totais = _calcularTotaisFatura(dados.linhas);
+    const numero = dados.numero || await proximoNumeroFatura(empresaId);
     const nova = {
-      id:             uid(),
-      numero:         dados.numero || proximoNumeroFatura(empresaId),
+      numero,
       data:           dados.data || today(),
       dataVencimento: dados.dataVencimento || '',
       clienteId:      dados.clienteId || '',
@@ -367,52 +379,48 @@ const DB = (() => {
       lancamentoId:   null,
       criadaEm:       today(),
     };
-    emp.faturas.unshift(nova);
-    _saveEmpresa(emp);
-    return nova;
+    const ref = await col.add(nova);
+    return { id: ref.id, ...nova };
   }
 
-  function editFatura(empresaId, id, dados) {
-    const emp = _getEmpresa(empresaId);
-    if (!emp) return;
-    const idx = (emp.faturas||[]).findIndex(f => f.id === id);
-    if (idx === -1) return;
-    const atual = emp.faturas[idx];
+  async function editFatura(empresaId, id, dados) {
+    const col = await _subCol(empresaId, 'faturas');
+    const snap = await col.doc(id).get();
+    if (!snap.exists) return;
+    const atual = snap.data();
     const linhas = dados.linhas || atual.linhas;
     const totais = _calcularTotaisFatura(linhas);
-    emp.faturas[idx] = {
-      ...atual, ...dados,
+    await col.doc(id).update({
+      ...dados,
       linhas,
       valorBase:  totais.base,
       valorIva:   totais.iva,
       valorTotal: totais.total,
-    };
-    _saveEmpresa(emp);
+    });
   }
 
-  function deleteFatura(empresaId, id) {
-    const emp = _getEmpresa(empresaId);
-    if (!emp) return false;
-    const fat = (emp.faturas||[]).find(f => f.id === id);
-    if (!fat) return false;
-    if (fat.estado !== 'rascunho') return false; // só apaga rascunhos
-    emp.faturas = emp.faturas.filter(f => f.id !== id);
-    _saveEmpresa(emp);
+  async function deleteFatura(empresaId, id) {
+    const col = await _subCol(empresaId, 'faturas');
+    const snap = await col.doc(id).get();
+    if (!snap.exists) return false;
+    if (snap.data().estado !== 'rascunho') return false; // só apaga rascunhos
+    await col.doc(id).delete();
     return true;
   }
 
   // Emite a fatura (rascunho → emitida) e gera o lançamento contabilístico no diário de Vendas
-  function emitirFatura(empresaId, id) {
-    const emp = _getEmpresa(empresaId);
-    if (!emp) return null;
-    const fat = (emp.faturas||[]).find(f => f.id === id);
-    if (!fat || fat.estado !== 'rascunho') return null;
+  async function emitirFatura(empresaId, id) {
+    const colFat = await _subCol(empresaId, 'faturas');
+    const snap = await colFat.doc(id).get();
+    if (!snap.exists) return null;
+    const fat = snap.data();
+    if (fat.estado !== 'rascunho') return null;
 
-    const cliente = (emp.clientes||[]).find(c => c.id === fat.clienteId);
+    const clientes = await getClientes(empresaId);
+    const cliente = clientes.find(c => c.id === fat.clienteId);
     const taxaPredominante = (fat.linhas||[]).reduce((max,l)=> (parseFloat(l.taxaIva)||0) > max ? (parseFloat(l.taxaIva)||0) : max, 0);
 
-    const lanc = {
-      id:           uid(),
+    const lancNovo = await addLancamento(empresaId, {
       data:         fat.data,
       diario:       'V',
       documento:    fat.numero,
@@ -425,38 +433,50 @@ const DB = (() => {
       valorTotal:   fat.valorTotal,
       retencao:     0,
       estado:       'pendente',
-      criadoEm:     today(),
-    };
-    emp.lancamentos.unshift(lanc);
+    });
 
-    fat.estado = 'emitida';
-    fat.lancamentoId = lanc.id;
-    fat.emitidaEm = today();
-    _saveEmpresa(emp);
-    return fat;
+    const atualizacao = { estado: 'emitida', lancamentoId: lancNovo.id, emitidaEm: today() };
+    await colFat.doc(id).update(atualizacao);
+    return { id, ...fat, ...atualizacao };
   }
 
-  function marcarFaturaPaga(empresaId, id) {
-    const emp = _getEmpresa(empresaId);
-    if (!emp) return null;
-    const fat = (emp.faturas||[]).find(f => f.id === id);
-    if (!fat || fat.estado !== 'emitida') return null;
-    fat.estado = 'paga';
-    fat.pagaEm = today();
-    // marcar lançamento associado como conferido
+  async function marcarFaturaPaga(empresaId, id) {
+    const colFat = await _subCol(empresaId, 'faturas');
+    const snap = await colFat.doc(id).get();
+    if (!snap.exists) return null;
+    const fat = snap.data();
+    if (fat.estado !== 'emitida') return null;
+
+    const atualizacao = { estado: 'paga', pagaEm: today() };
+    await colFat.doc(id).update(atualizacao);
+
     if (fat.lancamentoId) {
-      const lanc = emp.lancamentos.find(l => l.id === fat.lancamentoId);
-      if (lanc) lanc.estado = 'conferido';
+      await editLancamento(empresaId, fat.lancamentoId, { estado: 'conferido' });
     }
-    _saveEmpresa(emp);
-    return fat;
+    return { id, ...fat, ...atualizacao };
+  }
+
+  // ── IVA Períodos ─────────────────────────────────────────
+  async function getIvaPeriodos(empresaId) {
+    const col = await _subCol(empresaId, 'ivaPeriodos');
+    return _getAllDocs(col, 'criadoEm', true);
+  }
+
+  async function addIvaPeriodo(empresaId, periodo) {
+    const col = await _subCol(empresaId, 'ivaPeriodos');
+    const novo = { criadoEm: today(), estado: 'apurado', ...periodo };
+    const ref = await col.add(novo);
+    return { id: ref.id, ...novo };
+  }
+
+  async function marcarIvaPeriodoSubmetido(empresaId, periodoId) {
+    const col = await _subCol(empresaId, 'ivaPeriodos');
+    await col.doc(periodoId).update({ estado: 'submetido' });
   }
 
   // ── Estatísticas rápidas ─────────────────────────────────
-  function statsEmpresa(empresaId) {
-    const emp = _getEmpresa(empresaId);
-    if (!emp) return {};
-    const lancs = emp.lancamentos || [];
+  async function statsEmpresa(empresaId) {
+    const lancs = await getLancamentos(empresaId);
     const totalLanc = lancs.length;
     const ivaLiquidado = lancs.reduce((s, l) => s + (l.taxaIva > 0 && l.diario === 'V' ? l.valorIva : 0), 0);
     const ivaDedutivel = lancs.reduce((s, l) => s + (l.taxaIva > 0 && l.diario === 'C' ? l.valorIva : 0), 0);
@@ -465,26 +485,47 @@ const DB = (() => {
   }
 
   // ── Export / Import JSON ─────────────────────────────────
-  function exportEmpresa(empresaId) {
-    const emp = _getEmpresa(empresaId);
+  async function exportEmpresa(empresaId) {
+    const emp = await empresaActivaPorId(empresaId);
     if (!emp) return;
-    const blob = new Blob([JSON.stringify(emp, null, 2)], { type: 'application/json' });
+    const [planoContas, diarios, lancamentos, clientes, faturas, ivaPeriodos] = await Promise.all([
+      getContas(empresaId), getDiarios(empresaId), getLancamentos(empresaId),
+      getClientes(empresaId), getFaturas(empresaId), getIvaPeriodos(empresaId),
+    ]);
+    const pacote = { ...emp, planoContas, diarios, lancamentos, clientes, faturas, ivaPeriodos };
+    const blob = new Blob([JSON.stringify(pacote, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `snc_${emp.nome.replace(/\s+/g,'_')}_backup.json`;
     a.click();
   }
 
-  function importEmpresa(jsonStr) {
+  async function importEmpresa(jsonStr) {
     try {
-      const emp = JSON.parse(jsonStr);
-      if (!emp.nome || !emp.planoContas) throw new Error('Ficheiro inválido');
-      emp.id = uid(); // novo id para evitar conflito
-      const empresas = getEmpresas();
-      empresas.push(emp);
-      saveEmpresas(empresas);
-      return emp;
+      const dados = JSON.parse(jsonStr);
+      if (!dados.nome || !dados.planoContas) throw new Error('Ficheiro inválido');
+
+      const col = await _empresasCol();
+      const ref = col.doc();
+      const base = {
+        nome: dados.nome, nif: dados.nif||'', morada: dados.morada||'',
+        exercicio: dados.exercicio || new Date().getFullYear(),
+        regime: dados.regime || 'mensal', criadaEm: today(),
+      };
+      await ref.set(base);
+
+      const batch = db.batch();
+      (dados.planoContas||[]).forEach(c => batch.set(ref.collection('planoContas').doc(c.codigo || uid()), c));
+      (dados.diarios||[]).forEach(d => batch.set(ref.collection('diarios').doc(d.codigo || uid()), d));
+      (dados.clientes||[]).forEach(c => batch.set(ref.collection('clientes').doc(uid()), c));
+      (dados.lancamentos||[]).forEach(l => batch.set(ref.collection('lancamentos').doc(uid()), l));
+      (dados.faturas||[]).forEach(f => batch.set(ref.collection('faturas').doc(uid()), f));
+      (dados.ivaPeriodos||[]).forEach(p => batch.set(ref.collection('ivaPeriodos').doc(uid()), p));
+      await batch.commit();
+
+      return { id: ref.id, ...base };
     } catch(e) {
+      console.error('Erro ao importar empresa:', e);
       return null;
     }
   }
@@ -506,7 +547,7 @@ const DB = (() => {
     // faturação
     getFaturas, addFatura, editFatura, deleteFatura, emitirFatura, marcarFaturaPaga, proximoNumeroFatura,
     // iva
-    getIvaPeriodos, addIvaPeriodo,
+    getIvaPeriodos, addIvaPeriodo, marcarIvaPeriodoSubmetido,
     // stats
     statsEmpresa,
     // import/export

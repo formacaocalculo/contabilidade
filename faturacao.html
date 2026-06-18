@@ -197,28 +197,35 @@
   </div>
 </div>
 
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script src="auth-guard.js"></script>
 <script src="db.js"></script>
 <script src="_sidebar.js"></script>
 <script src="script.js"></script>
 <script>
 let empresaId, linhaSeq = 0;
 
-document.addEventListener('DOMContentLoaded', () => {
-  renderSidebar('faturacao.html');
-  const emp = DB.empresaActiva();
-  if (!emp) return;
+document.addEventListener('DOMContentLoaded', async () => {
+  const user = await window.authReady;
+  if (!user) return;
+
+  await renderSidebar('faturacao.html');
+  const emp = await DB.empresaActiva();
+  if (!emp) { location.href = 'empresas.html'; return; }
   empresaId = emp.id;
   document.getElementById('avatar-initials').textContent = emp.nome.split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase();
 
-  renderStats();
-  renderFaturas();
-  renderClientes();
+  await renderStats();
+  await renderFaturas();
+  await renderClientes();
 });
 
 /* ══════════ Stats ══════════ */
-function renderStats() {
-  const faturas = DB.getFaturas(empresaId);
-  const clientes = DB.getClientes(empresaId);
+async function renderStats() {
+  const [faturas, clientes] = await Promise.all([ DB.getFaturas(empresaId), DB.getClientes(empresaId) ]);
   const hoje = new Date();
   const mesAtual = hoje.toISOString().slice(0,7);
 
@@ -236,12 +243,12 @@ function renderStats() {
 }
 
 /* ══════════ Faturas ══════════ */
-function renderFaturas() {
+async function renderFaturas() {
   const fEstado = document.getElementById('filtro-fat-estado').value;
   const fDe     = document.getElementById('filtro-fat-de').value;
   const fAte    = document.getElementById('filtro-fat-ate').value;
 
-  let lista = DB.getFaturas(empresaId);
+  let lista = await DB.getFaturas(empresaId);
   if (fEstado) lista = lista.filter(f=>f.estado===fEstado);
   if (fDe)     lista = lista.filter(f=>f.data>=fDe);
   if (fAte)    lista = lista.filter(f=>f.data<=fAte);
@@ -253,7 +260,7 @@ function renderFaturas() {
   if (lista.length === 0) { tbody.innerHTML=''; semEl.hidden=false; return; }
   semEl.hidden = true;
 
-  const clientes = DB.getClientes(empresaId);
+  const clientes = await DB.getClientes(empresaId);
   const estadoBadge = { rascunho:'badge-muted', emitida:'badge-gold', paga:'badge-green' };
   const estadoLabel = { rascunho:'Rascunho', emitida:'Emitida', paga:'Paga' };
 
@@ -335,36 +342,37 @@ function atualizarTotaisPreview() {
   document.getElementById('ft-total').textContent= fmtEUR(base+iva);
 }
 
-function popularSelectClientes(selecionado) {
+async function popularSelectClientes(selecionado) {
   const sel = document.getElementById('nf-cliente');
-  const clientes = DB.getClientes(empresaId);
+  const clientes = await DB.getClientes(empresaId);
   sel.innerHTML = clientes.length
     ? clientes.map(c=>`<option value="${c.id}" ${c.id===selecionado?'selected':''}>${c.nome}${c.nif?' — '+c.nif:''}</option>`).join('')
     : `<option value="">Sem clientes — clique em "+" para criar</option>`;
 }
 
-function abrirNovaFatura() {
+async function abrirNovaFatura() {
   document.getElementById('modal-fat-title').textContent = 'Nova Fatura';
   document.getElementById('edit-fat-id').value = '';
-  document.getElementById('nf-numero').value = DB.proximoNumeroFatura(empresaId);
+  document.getElementById('nf-numero').value = await DB.proximoNumeroFatura(empresaId);
   document.getElementById('nf-data').value = DB.today();
   document.getElementById('nf-vencimento').value = '';
-  popularSelectClientes('');
+  await popularSelectClientes('');
   _linhasAtuais = [novaLinhaObj()];
   renderLinhas();
   document.getElementById('btn-guardar-rascunho').style.display = '';
   openModal('modal-fatura');
 }
 
-function editarFatura(id) {
-  const f = DB.getFaturas(empresaId).find(x=>x.id===id);
+async function editarFatura(id) {
+  const faturas = await DB.getFaturas(empresaId);
+  const f = faturas.find(x=>x.id===id);
   if (!f) return;
   document.getElementById('modal-fat-title').textContent = 'Editar Fatura (Rascunho)';
   document.getElementById('edit-fat-id').value = id;
   document.getElementById('nf-numero').value = f.numero;
   document.getElementById('nf-data').value = f.data;
   document.getElementById('nf-vencimento').value = f.dataVencimento||'';
-  popularSelectClientes(f.clienteId);
+  await popularSelectClientes(f.clienteId);
   _linhasAtuais = (f.linhas||[]).map(l=>({ ...l, _id: 'l'+(++linhaSeq) }));
   if (_linhasAtuais.length===0) _linhasAtuais=[novaLinhaObj()];
   renderLinhas();
@@ -372,7 +380,7 @@ function editarFatura(id) {
   openModal('modal-fatura');
 }
 
-function guardarFatura(estadoDestino) {
+async function guardarFatura(estadoDestino) {
   const clienteId = document.getElementById('nf-cliente').value;
   if (!clienteId) { showToast('Selecione um cliente','danger'); return; }
   const linhasValidas = _linhasAtuais.filter(l => l.descricao && l.descricao.trim() && (parseFloat(l.precoUnit)||0) >= 0 && (parseFloat(l.quantidade)||0) > 0);
@@ -389,48 +397,48 @@ function guardarFatura(estadoDestino) {
   let faturaId = editId;
 
   if (editId) {
-    DB.editFatura(empresaId, editId, dados);
+    await DB.editFatura(empresaId, editId, dados);
     showToast('Fatura atualizada','success');
   } else {
-    const nova = DB.addFatura(empresaId, dados);
+    const nova = await DB.addFatura(empresaId, dados);
     faturaId = nova.id;
     showToast('Fatura guardada como rascunho','success');
   }
 
   if (estadoDestino === 'emitida') {
-    const resultado = DB.emitirFatura(empresaId, faturaId);
+    const resultado = await DB.emitirFatura(empresaId, faturaId);
     if (resultado) {
       showToast(`Fatura ${resultado.numero} emitida — lançamento gerado no diário de Vendas`,'success');
     }
   }
 
   closeModal('modal-fatura');
-  renderStats();
-  renderFaturas();
-  renderClientes();
+  await renderStats();
+  await renderFaturas();
+  await renderClientes();
 }
 
-function pagarFatura(id) {
-  const f = DB.marcarFaturaPaga(empresaId, id);
+async function pagarFatura(id) {
+  const f = await DB.marcarFaturaPaga(empresaId, id);
   if (f) showToast(`Fatura ${f.numero} marcada como paga`,'success');
-  renderStats();
-  renderFaturas();
+  await renderStats();
+  await renderFaturas();
 }
 
-function apagarFatura(id) {
+async function apagarFatura(id) {
   if (!confirm('Apagar este rascunho de fatura? Esta ação não pode ser revertida.')) return;
-  const ok = DB.deleteFatura(empresaId, id);
+  const ok = await DB.deleteFatura(empresaId, id);
   if (ok === false) { showToast('Só é possível apagar faturas em rascunho','danger'); return; }
   showToast('Rascunho apagado','warning');
-  renderStats();
-  renderFaturas();
+  await renderStats();
+  await renderFaturas();
 }
 
-function verFatura(id) {
-  const f = DB.getFaturas(empresaId).find(x=>x.id===id);
+async function verFatura(id) {
+  const [faturas, clientes, emp] = await Promise.all([ DB.getFaturas(empresaId), DB.getClientes(empresaId), DB.empresaActiva() ]);
+  const f = faturas.find(x=>x.id===id);
   if (!f) return;
-  const cli = DB.getClientes(empresaId).find(c=>c.id===f.clienteId);
-  const emp = DB.empresaActiva();
+  const cli = clientes.find(c=>c.id===f.clienteId);
   const estadoBadge = { rascunho:'badge-muted', emitida:'badge-gold', paga:'badge-green' };
   const estadoLabel = { rascunho:'Rascunho', emitida:'Emitida', paga:'Paga' };
 
@@ -475,9 +483,8 @@ function verFatura(id) {
 }
 
 /* ══════════ Clientes ══════════ */
-function renderClientes() {
-  const clientes = DB.getClientes(empresaId);
-  const faturas  = DB.getFaturas(empresaId);
+async function renderClientes() {
+  const [clientes, faturas] = await Promise.all([ DB.getClientes(empresaId), DB.getFaturas(empresaId) ]);
   document.getElementById('cli-count-label').textContent = `${clientes.length} clientes`;
   const tbody = document.getElementById('tbody-clientes');
   const semEl = document.getElementById('sem-clientes');
@@ -514,8 +521,9 @@ function abrirNovoCliente(voltarParaFatura) {
   openModal('modal-cliente');
 }
 
-function editarCliente(id) {
-  const c = DB.getClientes(empresaId).find(x=>x.id===id);
+async function editarCliente(id) {
+  const clientes = await DB.getClientes(empresaId);
+  const c = clientes.find(x=>x.id===id);
   if (!c) return;
   document.getElementById('modal-cli-title').textContent = 'Editar Cliente';
   document.getElementById('edit-cli-id').value = id;
@@ -528,7 +536,7 @@ function editarCliente(id) {
   openModal('modal-cliente');
 }
 
-function guardarCliente() {
+async function guardarCliente() {
   const nome = document.getElementById('nc2-nome').value.trim();
   if (!nome) { showToast('O nome do cliente é obrigatório','danger'); return; }
   const dados = {
@@ -542,30 +550,30 @@ function guardarCliente() {
   const voltaFatura = document.getElementById('cli-volta-fatura').value === '1';
   let cliente;
   if (editId) {
-    DB.editCliente(empresaId, editId, dados);
+    await DB.editCliente(empresaId, editId, dados);
     showToast('Cliente atualizado','success');
     cliente = { id: editId };
   } else {
-    cliente = DB.addCliente(empresaId, dados);
+    cliente = await DB.addCliente(empresaId, dados);
     showToast('Cliente criado','success');
   }
   closeModal('modal-cliente');
-  renderClientes();
-  renderStats();
+  await renderClientes();
+  await renderStats();
 
   if (voltaFatura && cliente) {
-    popularSelectClientes(cliente.id);
+    await popularSelectClientes(cliente.id);
     openModal('modal-fatura');
   }
 }
 
-function apagarCliente(id) {
+async function apagarCliente(id) {
   if (!confirm('Apagar este cliente?')) return;
-  const ok = DB.deleteCliente(empresaId, id);
+  const ok = await DB.deleteCliente(empresaId, id);
   if (ok === false) { showToast('Não é possível apagar: cliente tem faturas associadas','danger'); return; }
   showToast('Cliente apagado','warning');
-  renderClientes();
-  renderStats();
+  await renderClientes();
+  await renderStats();
 }
 </script>
 </body>

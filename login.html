@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>ContaSNC — Entrar</title>
+  <link rel="stylesheet" href="style.css"/>
+  <script>(function(){var t=localStorage.getItem("snc_theme")||"light";document.documentElement.setAttribute("data-theme",t);})();</script>
+  <style>
+    body { display:flex; align-items:center; justify-content:center; min-height:100vh; padding:24px; background:var(--cream); }
+    .login-box { width:100%; max-width:400px; background:var(--white); border:1px solid var(--border); border-radius:12px; padding:36px; box-shadow:var(--shadow-lg); }
+    .login-logo { display:flex; align-items:center; gap:12px; margin-bottom:28px; }
+    .login-logo .logo-icon { width:42px;height:42px;background:var(--navy);border-radius:9px;display:flex;align-items:center;justify-content:center;font-family:'DM Serif Display',serif;font-size:21px;color:var(--gold);flex-shrink:0; }
+    .login-logo h1 { font-family:'DM Serif Display',serif;font-size:23px;color:var(--navy);line-height:1.1; }
+    .login-logo p { font-size:11px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:var(--muted); }
+    .login-tabs { display:flex; gap:2px; border-bottom:1px solid var(--border); margin-bottom:22px; }
+    .login-tab { flex:1; padding:10px; text-align:center; font-size:13px; font-weight:600; color:var(--muted); background:none; border:none; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; }
+    .login-tab.active { color:var(--text); border-bottom-color:var(--gold); }
+    #login-erro { display:none; background:rgba(176,58,46,0.1); border-left:3px solid var(--danger); color:var(--danger); font-size:13px; padding:10px 14px; border-radius:6px; margin-bottom:16px; }
+    #login-loading { display:none; text-align:center; font-size:13px; color:var(--muted); padding:8px 0; }
+  </style>
+</head>
+<body>
+  <div class="login-box">
+    <div class="login-logo">
+      <div class="logo-icon">Σ</div>
+      <div>
+        <h1>ContaSNC</h1>
+        <p>Sistema de Contabilidade — SNC</p>
+      </div>
+    </div>
+
+    <div class="login-tabs">
+      <button class="login-tab active" id="tab-entrar" onclick="mudarAba('entrar')">Entrar</button>
+      <button class="login-tab" id="tab-registar" onclick="mudarAba('registar')">Criar Conta</button>
+    </div>
+
+    <div id="login-erro"></div>
+    <div id="login-loading">A processar…</div>
+
+    <!-- ── Formulário Entrar ── -->
+    <form id="form-entrar" onsubmit="return fazerLogin(event)">
+      <div class="form-group">
+        <label class="form-label">Email</label>
+        <input type="email" class="form-input" id="entrar-email" autocomplete="email" required/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Palavra-passe</label>
+        <input type="password" class="form-input" id="entrar-pass" autocomplete="current-password" required/>
+      </div>
+      <button type="submit" class="btn btn-gold" style="width:100%;justify-content:center;margin-top:6px">Entrar</button>
+      <button type="button" class="btn btn-outline" style="width:100%;justify-content:center;margin-top:10px;font-size:12.5px" onclick="recuperarPassword()">Esqueci-me da palavra-passe</button>
+    </form>
+
+    <!-- ── Formulário Registar ── -->
+    <form id="form-registar" onsubmit="return fazerRegisto(event)" hidden>
+      <div class="form-group">
+        <label class="form-label">Email</label>
+        <input type="email" class="form-input" id="registar-email" autocomplete="email" required/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Palavra-passe</label>
+        <input type="password" class="form-input" id="registar-pass" autocomplete="new-password" minlength="6" required/>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">Mínimo 6 caracteres.</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Confirmar Palavra-passe</label>
+        <input type="password" class="form-input" id="registar-pass2" autocomplete="new-password" minlength="6" required/>
+      </div>
+      <button type="submit" class="btn btn-gold" style="width:100%;justify-content:center;margin-top:6px">Criar Conta</button>
+    </form>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+  <script src="firebase-config.js"></script>
+  <script>
+    // Se já houver sessão activa, salta direto para a app
+    auth.onAuthStateChanged((user) => {
+      if (user) {
+        const destino = sessionStorage.getItem('snc_redirect_apos_login') || 'empresas.html';
+        sessionStorage.removeItem('snc_redirect_apos_login');
+        location.href = destino;
+      }
+    });
+
+    function mudarAba(qual) {
+      document.getElementById('tab-entrar').classList.toggle('active', qual==='entrar');
+      document.getElementById('tab-registar').classList.toggle('active', qual==='registar');
+      document.getElementById('form-entrar').hidden   = qual!=='entrar';
+      document.getElementById('form-registar').hidden = qual!=='registar';
+      esconderErro();
+    }
+
+    function mostrarErro(msg) {
+      const el = document.getElementById('login-erro');
+      el.textContent = msg;
+      el.style.display = 'block';
+    }
+    function esconderErro() {
+      document.getElementById('login-erro').style.display = 'none';
+    }
+    function setLoading(on) {
+      document.getElementById('login-loading').style.display = on ? 'block' : 'none';
+    }
+
+    function traduzErro(code) {
+      const mapa = {
+        'auth/invalid-email':          'Email inválido.',
+        'auth/user-disabled':          'Esta conta foi desativada.',
+        'auth/user-not-found':         'Não existe conta com este email.',
+        'auth/wrong-password':         'Palavra-passe incorreta.',
+        'auth/invalid-credential':     'Email ou palavra-passe incorretos.',
+        'auth/email-already-in-use':   'Já existe uma conta com este email.',
+        'auth/weak-password':          'Palavra-passe demasiado fraca (mínimo 6 caracteres).',
+        'auth/network-request-failed': 'Falha de rede. Verifique a sua ligação.',
+        'auth/too-many-requests':      'Demasiadas tentativas. Tente novamente mais tarde.',
+      };
+      return mapa[code] || 'Ocorreu um erro. Tente novamente.';
+    }
+
+    async function fazerLogin(e) {
+      e.preventDefault();
+      esconderErro();
+      const email = document.getElementById('entrar-email').value.trim();
+      const pass  = document.getElementById('entrar-pass').value;
+      setLoading(true);
+      try {
+        await auth.signInWithEmailAndPassword(email, pass);
+        // onAuthStateChanged acima trata do redireccionamento
+      } catch (err) {
+        setLoading(false);
+        mostrarErro(traduzErro(err.code));
+      }
+      return false;
+    }
+
+    async function fazerRegisto(e) {
+      e.preventDefault();
+      esconderErro();
+      const email = document.getElementById('registar-email').value.trim();
+      const pass  = document.getElementById('registar-pass').value;
+      const pass2 = document.getElementById('registar-pass2').value;
+      if (pass !== pass2) { mostrarErro('As palavras-passe não coincidem.'); return false; }
+      setLoading(true);
+      try {
+        await auth.createUserWithEmailAndPassword(email, pass);
+        // onAuthStateChanged acima trata do redireccionamento
+      } catch (err) {
+        setLoading(false);
+        mostrarErro(traduzErro(err.code));
+      }
+      return false;
+    }
+
+    async function recuperarPassword() {
+      esconderErro();
+      const email = document.getElementById('entrar-email').value.trim();
+      if (!email) { mostrarErro('Indique o seu email no campo acima primeiro.'); return; }
+      setLoading(true);
+      try {
+        await auth.sendPasswordResetEmail(email);
+        setLoading(false);
+        mostrarErro('Email de recuperação enviado. Verifique a sua caixa de entrada.');
+        document.getElementById('login-erro').style.background = 'rgba(45,122,79,0.1)';
+        document.getElementById('login-erro').style.borderLeftColor = 'var(--success)';
+        document.getElementById('login-erro').style.color = 'var(--success)';
+      } catch (err) {
+        setLoading(false);
+        mostrarErro(traduzErro(err.code));
+      }
+    }
+  </script>
+</body>
+</html>

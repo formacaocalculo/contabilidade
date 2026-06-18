@@ -160,21 +160,30 @@
   </div>
 </div>
 
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script src="auth-guard.js"></script>
 <script src="db.js"></script>
 <script src="_sidebar.js"></script>
 <script src="script.js"></script>
 <script>
 let empresaId, todosLancs=[];
 
-document.addEventListener('DOMContentLoaded', () => {
-  renderSidebar('lancamentos.html');
-  const emp = DB.empresaActiva();
+document.addEventListener('DOMContentLoaded', async () => {
+  const user = await window.authReady;
+  if (!user) return;
+
+  await renderSidebar('lancamentos.html');
+  const emp = await DB.empresaActiva();
+  if (!emp) { location.href = 'empresas.html'; return; }
   empresaId = emp.id;
   document.getElementById('avatar-initials').textContent = emp.nome.split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase();
   document.getElementById('nl-data').value = DB.today();
 
   // preencher select diários
-  const diarios = DB.getDiarios(empresaId);
+  const diarios = await DB.getDiarios(empresaId);
   const selDiario  = document.getElementById('nl-diario');
   const filtDiario = document.getElementById('filtro-diario');
   diarios.forEach(d => {
@@ -184,7 +193,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // preencher datalist contas
   const dl = document.getElementById('lista-contas');
-  DB.getContas(empresaId).forEach(c => {
+  const contas = await DB.getContas(empresaId);
+  contas.forEach(c => {
     const opt = document.createElement('option');
     opt.value = c.codigo;
     opt.label = c.designacao;
@@ -195,11 +205,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const params = new URLSearchParams(location.search);
   if (params.get('diario')) filtDiario.value = params.get('diario');
 
-  renderLancamentos();
+  await renderLancamentos();
 });
 
-function renderLancamentos() {
-  todosLancs = DB.getLancamentos(empresaId);
+async function renderLancamentos() {
+  todosLancs = await DB.getLancamentos(empresaId);
   const fDiario = document.getElementById('filtro-diario').value;
   const fEstado = document.getElementById('filtro-estado').value;
   const fDe     = document.getElementById('filtro-de').value;
@@ -253,7 +263,7 @@ function abrirNovoLancamento() {
 }
 
 function editarLancamento(id) {
-  const l = DB.getLancamentos(empresaId).find(x=>x.id===id);
+  const l = todosLancs.find(x=>x.id===id);
   if (!l) return;
   document.getElementById('modal-lanc-title').textContent = 'Editar Lançamento';
   document.getElementById('edit-lanc-id').value = id;
@@ -290,7 +300,7 @@ function calcIVALive() {
   }
 }
 
-function guardarLancamento() {
+async function guardarLancamento() {
   const desc = document.getElementById('nl-desc').value.trim();
   const base = parseFloat(document.getElementById('nl-base').value)||0;
   if (!desc) { showToast('A descrição é obrigatória','danger'); return; }
@@ -315,21 +325,21 @@ function guardarLancamento() {
   };
   const editId = document.getElementById('edit-lanc-id').value;
   if (editId) {
-    DB.editLancamento(empresaId, editId, dados);
+    await DB.editLancamento(empresaId, editId, dados);
     showToast('Lançamento actualizado','success');
   } else {
-    DB.addLancamento(empresaId, dados);
+    await DB.addLancamento(empresaId, dados);
     showToast('Lançamento registado','success');
   }
   closeModal('modal-lancamento');
-  renderLancamentos();
+  await renderLancamentos();
 }
 
-function apagarLancamento(id) {
+async function apagarLancamento(id) {
   if (!confirm('Apagar este lançamento? Não pode ser revertido.')) return;
-  DB.deleteLancamento(empresaId, id);
+  await DB.deleteLancamento(empresaId, id);
   showToast('Lançamento apagado','warning');
-  renderLancamentos();
+  await renderLancamentos();
 }
 </script>
 </body>

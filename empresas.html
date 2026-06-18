@@ -42,12 +42,13 @@
   <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:20px">
     <div>
       <h2 style="font-family:'DM Serif Display',serif;font-size:22px;color:var(--navy)">Seleccione uma Empresa</h2>
-      <p style="font-size:13px;color:var(--muted);margin-top:3px">Ou crie uma nova para começar.</p>
+      <p style="font-size:13px;color:var(--muted);margin-top:3px" id="utilizador-label">Ou crie uma nova para começar.</p>
     </div>
     <div style="display:flex;gap:8px;align-items:center">
       <button id="theme-btn" class="btn btn-outline btn-sm" onclick="toggleTema()" title="Modo claro/escuro" style="font-size:16px;padding:5px 10px"></button>
       <button class="btn btn-outline btn-sm" onclick="importarEmpresa()">⬆ Importar</button>
       <input type="file" id="import-input" accept=".json" hidden onchange="handleImport(event)"/>
+      <button class="btn btn-outline btn-sm" onclick="logout()" title="Terminar sessão">⎋ Sair</button>
     </div>
   </div>
 
@@ -55,6 +56,7 @@
   <p id="sem-empresas" hidden style="text-align:center;font-size:13px;color:var(--muted);margin-top:8px">
     Sem empresas criadas. Clique em "Nova Empresa" para começar.
   </p>
+  <p id="a-carregar" style="text-align:center;font-size:13px;color:var(--muted);margin-top:8px">A carregar empresas…</p>
 </div>
 
 <!-- ═══ Overlay: Nova / Editar Empresa ═══ -->
@@ -93,7 +95,7 @@
     </div>
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px">
       <button class="btn btn-outline" onclick="fecharOv('ov-empresa')">Cancelar</button>
-      <button class="btn btn-gold" onclick="guardarEmpresa()">Guardar</button>
+      <button class="btn btn-gold" id="btn-guardar-empresa" onclick="guardarEmpresa()">Guardar</button>
     </div>
   </div>
 </div>
@@ -111,7 +113,7 @@
     <input type="hidden" id="eliminar-id"/>
     <div style="display:flex;gap:10px;justify-content:flex-end">
       <button class="btn btn-outline" onclick="fecharOv('ov-eliminar')">Cancelar</button>
-      <button class="btn" style="background:var(--danger);color:#fff;border:none" onclick="confirmarEliminar()">Eliminar</button>
+      <button class="btn" style="background:var(--danger);color:#fff;border:none" id="btn-confirmar-eliminar" onclick="confirmarEliminar()">Eliminar</button>
     </div>
   </div>
 </div>
@@ -119,6 +121,11 @@
 <!-- Toast container -->
 <div id="toasts" style="position:fixed;bottom:24px;right:24px;z-index:999;display:flex;flex-direction:column;gap:10px;pointer-events:none"></div>
 
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script src="auth-guard.js"></script>
 <script src="db.js"></script>
 <script>
 /* ── Tema: aplicar antes de renderizar para evitar flash ── */
@@ -162,19 +169,24 @@ document.addEventListener('keydown', e => {
   }
 });
 
+let _empresasCache = [];
+
 /* ── Render grelha de empresas ── */
-function renderEmpresas() {
+async function renderEmpresas() {
   const grid    = document.getElementById('emp-grid');
   const semEl   = document.getElementById('sem-empresas');
-  const empresas = DB.getEmpresas();
-  const activa   = DB.getEmpresaActiva();
+  const carregandoEl = document.getElementById('a-carregar');
 
+  const [empresas, activaId] = await Promise.all([ DB.getEmpresas(), Promise.resolve(DB.getEmpresaActiva()) ]);
+  _empresasCache = empresas;
+  carregandoEl.hidden = true;
   semEl.hidden = empresas.length > 0;
 
-  const cards = empresas.map(emp => {
-    const isActiva = activa && activa.id === emp.id;
-    const stats    = DB.statsEmpresa(emp.id);
-    // escapar apóstrofes no nome para uso inline em onclick
+  const statsPorEmpresa = await Promise.all(empresas.map(e => DB.statsEmpresa(e.id)));
+
+  const cards = empresas.map((emp, idx) => {
+    const isActiva = activaId === emp.id;
+    const stats    = statsPorEmpresa[idx];
     const nomeEsc  = emp.nome.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
     return `
       <div class="emp-card${isActiva?' active-card':''}">
@@ -220,7 +232,7 @@ function abrirNova() {
 }
 
 function abrirEditar(id) {
-  const emp = DB.getEmpresas().find(e => e.id === id);
+  const emp = _empresasCache.find(e => e.id === id);
   if (!emp) return;
   document.getElementById('ov-emp-titulo').textContent = 'Editar Empresa';
   document.getElementById('emp-edit-id').value = id;
@@ -233,7 +245,7 @@ function abrirEditar(id) {
   setTimeout(() => document.getElementById('emp-nome').focus(), 50);
 }
 
-function guardarEmpresa() {
+async function guardarEmpresa() {
   const nome = document.getElementById('emp-nome').value.trim();
   if (!nome) {
     toast('O nome da empresa é obrigatório','danger');
@@ -248,18 +260,25 @@ function guardarEmpresa() {
     regime:   document.getElementById('emp-regime').value,
   };
   const id = document.getElementById('emp-edit-id').value;
-  if (id) {
-    DB.editarEmpresa(id, dados);
-    fecharOv('ov-empresa');
-    toast('Empresa actualizada com sucesso','success');
-    renderEmpresas();
-  } else {
-    const nova = DB.criarEmpresa(dados);
-    DB.setEmpresaActiva(nova.id);
-    fecharOv('ov-empresa');
-    toast('Empresa criada! A entrar…','success');
-    // pequeno delay para o toast ser visível
-    setTimeout(() => { location.href = 'index.html'; }, 900);
+  const btn = document.getElementById('btn-guardar-empresa');
+  btn.disabled = true;
+  try {
+    if (id) {
+      await DB.editarEmpresa(id, dados);
+      fecharOv('ov-empresa');
+      toast('Empresa actualizada com sucesso','success');
+      await renderEmpresas();
+    } else {
+      const nova = await DB.criarEmpresa(dados);
+      DB.setEmpresaActiva(nova.id);
+      fecharOv('ov-empresa');
+      toast('Empresa criada! A entrar…','success');
+      setTimeout(() => { location.href = 'index.html'; }, 900);
+    }
+  } catch (e) {
+    toast('Erro ao guardar: '+e.message,'danger');
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -276,16 +295,24 @@ function pedirEliminar(id, nome) {
   abrirOv('ov-eliminar');
 }
 
-function confirmarEliminar() {
+async function confirmarEliminar() {
   const id = document.getElementById('eliminar-id').value;
-  DB.eliminarEmpresa(id);
-  fecharOv('ov-eliminar');
-  toast('Empresa eliminada','warning');
-  renderEmpresas();
+  const btn = document.getElementById('btn-confirmar-eliminar');
+  btn.disabled = true;
+  try {
+    await DB.eliminarEmpresa(id);
+    fecharOv('ov-eliminar');
+    toast('Empresa eliminada','warning');
+    await renderEmpresas();
+  } catch (e) {
+    toast('Erro ao eliminar: '+e.message,'danger');
+  } finally {
+    btn.disabled = false;
+  }
 }
 
-function exportar(id) {
-  DB.exportEmpresa(id);
+async function exportar(id) {
+  await DB.exportEmpresa(id);
   toast('Backup exportado','info');
 }
 
@@ -297,11 +324,11 @@ function handleImport(e) {
   const file = e.target.files[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = ev => {
-    const emp = DB.importEmpresa(ev.target.result);
+  reader.onload = async ev => {
+    const emp = await DB.importEmpresa(ev.target.result);
     if (emp) {
       toast(`"${emp.nome}" importada com sucesso`,'success');
-      renderEmpresas();
+      await renderEmpresas();
     } else {
       toast('Ficheiro inválido ou corrompido','danger');
     }
@@ -328,7 +355,12 @@ function updateThemeBtn() {
 
 /* ── Init ── */
 updateThemeBtn();
-renderEmpresas();
+window.authReady.then(user => {
+  if (user) {
+    document.getElementById('utilizador-label').textContent = `Sessão: ${user.email}`;
+    renderEmpresas();
+  }
+});
 </script>
 </body>
 </html>
