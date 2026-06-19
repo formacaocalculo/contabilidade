@@ -73,6 +73,8 @@ const DB = (() => {
     { codigo:'71',   designacao:'Vendas',                              nivel:2, tipo:'Conta',    natureza:'Rendimento',    movimentos:true  },
     { codigo:'711',  designacao:'Mercadorias',                         nivel:3, tipo:'Subconta', natureza:'Rendimento',    movimentos:true  },
     { codigo:'712',  designacao:'Produtos Acabados',                   nivel:3, tipo:'Subconta', natureza:'Rendimento',    movimentos:true  },
+    { codigo:'717',  designacao:'Devoluções de Vendas',                nivel:3, tipo:'Subconta', natureza:'Rendimento',    movimentos:true  },
+    { codigo:'718',  designacao:'Descontos e Abatimentos em Vendas',   nivel:3, tipo:'Subconta', natureza:'Rendimento',    movimentos:true  },
     { codigo:'72',   designacao:'Prestações de Serviços',              nivel:2, tipo:'Conta',    natureza:'Rendimento',    movimentos:true  },
     { codigo:'721',  designacao:'Serviços Prestados — Mercado Nacional',nivel:3,tipo:'Subconta', natureza:'Rendimento',    movimentos:true  },
     { codigo:'78',   designacao:'Outros Rendimentos e Ganhos',         nivel:2, tipo:'Conta',    natureza:'Rendimento',    movimentos:true  },
@@ -252,7 +254,7 @@ const DB = (() => {
     if (!snapEmpresa.exists) return;
     const dadosEmpresa = snapEmpresa.data();
 
-    const subcolecoes = ['planoContas','diarios','lancamentos','clientes','faturas','ivaPeriodos'];
+    const subcolecoes = ['planoContas','diarios','lancamentos','clientes','faturas','ivaPeriodos','notasCredito','aplicacoesCredito'];
     const dump = {};
     for (const nome of subcolecoes) {
       const col = docRef.collection(nome);
@@ -302,7 +304,7 @@ const DB = (() => {
     const { id, ...dadosEmpresa } = backup.empresa;
     await novaRef.set(dadosEmpresa);
 
-    const subcolecoes = ['planoContas','diarios','lancamentos','clientes','faturas','ivaPeriodos'];
+    const subcolecoes = ['planoContas','diarios','lancamentos','clientes','faturas','ivaPeriodos','notasCredito','aplicacoesCredito'];
     const batch = db.batch();
     subcolecoes.forEach(nome => {
       (backup[nome] || []).forEach(item => {
@@ -488,6 +490,7 @@ const DB = (() => {
       valorBase:      totais.base,
       valorIva:       totais.iva,
       valorTotal:     totais.total,
+      valorAbatido:   0,   // soma de notas de crédito já aplicadas a esta fatura
       estado:         dados.estado || 'rascunho',
       lancamentoId:   null,
       criadaEm:       today(),
@@ -569,6 +572,218 @@ const DB = (() => {
     return { id, ...fat, ...atualizacao };
   }
 
+  // Saldo ainda em dívida de uma fatura: total emitido menos o que já foi abatido por notas de crédito.
+  // (Não confundir com "paga"/"emitida" — uma fatura pode estar emitida mas já ter saldo parcialmente abatido.)
+  function _saldoPendenteFatura(fat) {
+    return Math.max(0, (fat.valorTotal||0) - (fat.valorAbatido||0));
+  }
+
+  // Empresas criadas antes desta funcionalidade existir não têm a conta 717 no plano —
+  // cria-a silenciosamente na primeira vez que for necessária.
+  async function _garantirConta717(empresaId) {
+    const col = await _subCol(empresaId, 'planoContas');
+    const snap = await col.doc('717').get();
+    if (!snap.exists) {
+      await col.doc('717').set({ codigo:'717', designacao:'Devoluções de Vendas', nivel:3, tipo:'Subconta', natureza:'Rendimento', movimentos:true });
+    }
+  }
+
+  // ── Notas de Crédito ──────────────────────────────────────
+  // Modelo N:N: uma nota de crédito pode abater valores em VÁRIAS faturas, e o
+  // histórico de cada abatimento fica registado em "aplicacoesCredito" (tabela
+  // relacional), o que permite reconstruir a qualquer momento quanto foi
+  // deduzido de cada fatura e por qual nota de crédito.
+  //
+  // users/{uid}/empresas/{empresaId}/notasCredito/{creditoId}
+  //   → numero, data, clienteId, motivo, linhas[], valorBase, valorIva, valorTotal,
+  //     valorAplicado (soma já abatida em faturas), estado ('aberta'|'aplicada'|'anulada')
+  // users/{uid}/empresas/{empresaId}/aplicacoesCredito/{aplicacaoId}
+  //   → notaCreditoId, faturaId, valorAbatido, criadaEm
+
+  async function getNotasCredito(empresaId) {
+    const col = await _subCol(empresaId, 'notasCredito');
+    return _getAllDocs(col, 'criadaEm', true);
+  }
+
+  async function proximoNumeroCredito(empresaId) {
+    const emp = await empresaActivaPorId(empresaId);
+    const ano = (emp && emp.exercicio) || new Date().getFullYear();
+    const col = await _subCol(empresaId, 'notasCredito');
+    const prefixo = `NC ${ano}/`;
+    const snap = await col.where('numero', '>=', prefixo).where('numero', '<', prefixo + '\uf8ff').get();
+    const seq = snap.size + 1;
+    return `${prefixo}${String(seq).padStart(4,'0')}`;
+  }
+
+  // Cria a nota de crédito a partir das linhas escolhidas de UMA fatura de origem
+  // (as linhas podem ser uma devolução parcial — quantidades/valores inferiores aos da fatura).
+  async function addNotaCredito(empresaId, dados) {
+    const col = await _subCol(empresaId, 'notasCredito');
+    const totais = _calcularTotaisFatura(dados.linhas);
+    const numero = dados.numero || await proximoNumeroCredito(empresaId);
+    const nova = {
+      numero,
+      data:            dados.data || today(),
+      clienteId:       dados.clienteId || '',
+      faturaOrigemId:  dados.faturaOrigemId || '', // fatura que originou a nota (referência SAF-T)
+      motivo:          dados.motivo || '',
+      linhas:          dados.linhas || [],
+      valorBase:       totais.base,
+      valorIva:        totais.iva,
+      valorTotal:      totais.total,
+      valorAplicado:   0, // soma já distribuída por faturas via aplicacoesCredito
+      estado:          'aberta', // aberta | aplicada (saldo=0) | anulada
+      criadaEm:        today(),
+    };
+    const ref = await col.add(nova);
+    return { id: ref.id, ...nova };
+  }
+
+  async function deleteNotaCredito(empresaId, id) {
+    const col = await _subCol(empresaId, 'notasCredito');
+    const snap = await col.doc(id).get();
+    if (!snap.exists) return false;
+    if ((snap.data().valorAplicado||0) > 0) return false; // não apagar se já tiver aplicações
+    await col.doc(id).delete();
+    return true;
+  }
+
+  // Lista as aplicações (abatimentos) já feitas com esta nota de crédito
+  async function getAplicacoesPorCredito(empresaId, notaCreditoId) {
+    const col = await _subCol(empresaId, 'aplicacoesCredito');
+    const snap = await col.where('notaCreditoId', '==', notaCreditoId).get();
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  }
+
+  // Lista as aplicações (abatimentos) já recebidas por uma fatura, vindas de quaisquer notas de crédito
+  async function getAplicacoesPorFatura(empresaId, faturaId) {
+    const col = await _subCol(empresaId, 'aplicacoesCredito');
+    const snap = await col.where('faturaId', '==', faturaId).get();
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  }
+
+  // Aplica manualmente um valor da nota de crédito a UMA fatura específica.
+  // Valida: (1) a soma já aplicada da nota + este valor não excede o total da nota;
+  //         (2) o valor não excede o saldo ainda em dívida dessa fatura.
+  // Gera o lançamento contabilístico: Débito 717 (Devoluções de Vendas) / Crédito 211 (Clientes).
+  async function aplicarCreditoEmFatura(empresaId, notaCreditoId, faturaId, valorAbatido) {
+    valorAbatido = parseFloat(valorAbatido) || 0;
+    if (valorAbatido <= 0) throw new Error('O valor a abater deve ser superior a 0.');
+
+    const colCred = await _subCol(empresaId, 'notasCredito');
+    const colFat  = await _subCol(empresaId, 'faturas');
+
+    const [snapCred, snapFat] = await Promise.all([ colCred.doc(notaCreditoId).get(), colFat.doc(faturaId).get() ]);
+    if (!snapCred.exists) throw new Error('Nota de crédito não encontrada.');
+    if (!snapFat.exists)  throw new Error('Fatura não encontrada.');
+
+    const cred = snapCred.data();
+    const fat  = snapFat.data();
+
+    if (cred.estado === 'anulada') throw new Error('Esta nota de crédito está anulada.');
+
+    // validação 1: não exceder o valor disponível da nota de crédito
+    const disponivelNaNota = (cred.valorTotal||0) - (cred.valorAplicado||0);
+    if (valorAbatido > disponivelNaNota + 0.005) { // pequena tolerância para arredondamentos
+      throw new Error(`Valor excede o saldo disponível da nota de crédito (${disponivelNaNota.toFixed(2)}€ disponíveis).`);
+    }
+
+    // validação 2: não exceder o saldo em dívida da fatura
+    const saldoFatura = _saldoPendenteFatura(fat);
+    if (valorAbatido > saldoFatura + 0.005) {
+      throw new Error(`Valor excede o saldo em dívida da fatura (${saldoFatura.toFixed(2)}€ em dívida).`);
+    }
+
+    // registar a aplicação (tabela relacional N:N)
+    const colApl = await _subCol(empresaId, 'aplicacoesCredito');
+    const aplicacao = { notaCreditoId, faturaId, valorAbatido, criadaEm: today() };
+    const refApl = await colApl.add(aplicacao);
+
+    // atualizar saldo acumulado na nota de crédito
+    const novoAplicadoCred = (cred.valorAplicado||0) + valorAbatido;
+    await colCred.doc(notaCreditoId).update({
+      valorAplicado: novoAplicadoCred,
+      estado: novoAplicadoCred >= (cred.valorTotal||0) - 0.005 ? 'aplicada' : 'aberta',
+    });
+
+    // atualizar saldo acumulado na fatura
+    const novoAbatidoFat = (fat.valorAbatido||0) + valorAbatido;
+    await colFat.doc(faturaId).update({ valorAbatido: novoAbatidoFat });
+
+    // lançamento contabilístico: Débito 717 (Devoluções de Vendas) / Crédito 211 (Clientes)
+    await _garantirConta717(empresaId);
+    const clientes = await getClientes(empresaId);
+    const cliente = clientes.find(c => c.id === cred.clienteId);
+    await addLancamento(empresaId, {
+      data:         today(),
+      diario:       'V',
+      documento:    `${cred.numero} → ${fat.numero}`,
+      descricao:    `Aplicação de nota de crédito ${cred.numero} na fatura ${fat.numero} — ${cliente?cliente.nome:'Cliente'}`,
+      contaDebito:  '717',
+      contaCredito: '211',
+      valorBase:    valorAbatido,
+      taxaIva:      0,
+      valorIva:     0,
+      valorTotal:   valorAbatido,
+      estado:       'conferido',
+    });
+
+    return { id: refApl.id, ...aplicacao };
+  }
+
+  // Remove uma aplicação já feita (desfaz o abatimento), repondo os saldos na nota e na fatura.
+  // Não remove o lançamento contabilístico histórico já gerado — apenas estorna via novo lançamento inverso,
+  // mantendo o rasto de auditoria completo.
+  async function removerAplicacaoCredito(empresaId, aplicacaoId) {
+    const colApl = await _subCol(empresaId, 'aplicacoesCredito');
+    const snapApl = await colApl.doc(aplicacaoId).get();
+    if (!snapApl.exists) return false;
+    const apl = snapApl.data();
+
+    const colCred = await _subCol(empresaId, 'notasCredito');
+    const colFat  = await _subCol(empresaId, 'faturas');
+    const [snapCred, snapFat] = await Promise.all([ colCred.doc(apl.notaCreditoId).get(), colFat.doc(apl.faturaId).get() ]);
+
+    if (snapCred.exists) {
+      const cred = snapCred.data();
+      const novoAplicado = Math.max(0, (cred.valorAplicado||0) - apl.valorAbatido);
+      await colCred.doc(apl.notaCreditoId).update({ valorAplicado: novoAplicado, estado: 'aberta' });
+    }
+    if (snapFat.exists) {
+      const fat = snapFat.data();
+      const novoAbatido = Math.max(0, (fat.valorAbatido||0) - apl.valorAbatido);
+      await colFat.doc(apl.faturaId).update({ valorAbatido: novoAbatido });
+
+      // lançamento de estorno (inverte o débito/crédito original)
+      await addLancamento(empresaId, {
+        data:         today(),
+        diario:       'V',
+        documento:    `Estorno aplicação`,
+        descricao:    `Estorno de abatimento de nota de crédito na fatura ${fat.numero}`,
+        contaDebito:  '211',
+        contaCredito: '717',
+        valorBase:    apl.valorAbatido,
+        taxaIva:      0,
+        valorIva:     0,
+        valorTotal:   apl.valorAbatido,
+        estado:       'conferido',
+      });
+    }
+
+    await colApl.doc(aplicacaoId).delete();
+    return true;
+  }
+
+  // Anula a nota de crédito por completo (não pode ter aplicações activas)
+  async function anularNotaCredito(empresaId, id) {
+    const col = await _subCol(empresaId, 'notasCredito');
+    const snap = await col.doc(id).get();
+    if (!snap.exists) return false;
+    if ((snap.data().valorAplicado||0) > 0) return false; // remover aplicações primeiro
+    await col.doc(id).update({ estado: 'anulada' });
+    return true;
+  }
+
   // ── IVA Períodos ─────────────────────────────────────────
   async function getIvaPeriodos(empresaId) {
     const col = await _subCol(empresaId, 'ivaPeriodos');
@@ -601,11 +816,12 @@ const DB = (() => {
   async function exportEmpresa(empresaId) {
     const emp = await empresaActivaPorId(empresaId);
     if (!emp) return;
-    const [planoContas, diarios, lancamentos, clientes, faturas, ivaPeriodos] = await Promise.all([
+    const [planoContas, diarios, lancamentos, clientes, faturas, ivaPeriodos, notasCredito, aplicacoesCredito] = await Promise.all([
       getContas(empresaId), getDiarios(empresaId), getLancamentos(empresaId),
       getClientes(empresaId), getFaturas(empresaId), getIvaPeriodos(empresaId),
+      getNotasCredito(empresaId), (async () => { const col = await _subCol(empresaId, 'aplicacoesCredito'); return _getAllDocs(col); })(),
     ]);
-    const pacote = { ...emp, planoContas, diarios, lancamentos, clientes, faturas, ivaPeriodos };
+    const pacote = { ...emp, planoContas, diarios, lancamentos, clientes, faturas, ivaPeriodos, notasCredito, aplicacoesCredito };
     const blob = new Blob([JSON.stringify(pacote, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -634,6 +850,8 @@ const DB = (() => {
       (dados.lancamentos||[]).forEach(l => batch.set(ref.collection('lancamentos').doc(uid()), l));
       (dados.faturas||[]).forEach(f => batch.set(ref.collection('faturas').doc(uid()), f));
       (dados.ivaPeriodos||[]).forEach(p => batch.set(ref.collection('ivaPeriodos').doc(uid()), p));
+      (dados.notasCredito||[]).forEach(c => batch.set(ref.collection('notasCredito').doc(uid()), c));
+      (dados.aplicacoesCredito||[]).forEach(a => batch.set(ref.collection('aplicacoesCredito').doc(uid()), a));
       await batch.commit();
 
       return { id: ref.id, ...base };
@@ -663,6 +881,9 @@ const DB = (() => {
     getClientes, addCliente, editCliente, deleteCliente,
     // faturação
     getFaturas, addFatura, editFatura, deleteFatura, emitirFatura, marcarFaturaPaga, proximoNumeroFatura,
+    // notas de crédito
+    getNotasCredito, addNotaCredito, deleteNotaCredito, anularNotaCredito, proximoNumeroCredito,
+    getAplicacoesPorCredito, getAplicacoesPorFatura, aplicarCreditoEmFatura, removerAplicacaoCredito,
     // iva
     getIvaPeriodos, addIvaPeriodo, marcarIvaPeriodoSubmetido,
     // stats

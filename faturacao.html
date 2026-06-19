@@ -18,6 +18,7 @@
     <div class="topbar-actions">
       <div id="empresa-selector"></div>
       <button class="btn btn-outline btn-sm" onclick="abrirNovoCliente()">+ Cliente</button>
+      <button class="btn btn-outline btn-sm" onclick="abrirNovaNotaCredito()">+ Nota de Crédito</button>
       <button class="btn btn-gold btn-sm" onclick="abrirNovaFatura()">+ Nova Fatura</button>
       <div class="avatar" id="avatar-initials">AC</div>
     </div>
@@ -34,6 +35,7 @@
     <div class="tabs" id="fat-tabs">
       <button class="tab-btn" data-tab="tab-faturas">Faturas</button>
       <button class="tab-btn" data-tab="tab-clientes">Clientes</button>
+      <button class="tab-btn" data-tab="tab-creditos">Notas de Crédito</button>
     </div>
 
     <!-- ══ Tab Faturas ══ -->
@@ -72,7 +74,7 @@
         </div>
         <table class="data-table" id="tbl-faturas">
           <thead>
-            <tr><th>Número</th><th>Data</th><th>Cliente</th><th>Vencimento</th><th class="amount">Base</th><th class="amount">IVA</th><th class="amount">Total</th><th>Estado</th><th></th></tr>
+            <tr><th>Número</th><th>Data</th><th>Cliente</th><th>Vencimento</th><th class="amount">Total</th><th class="amount">Abatido</th><th class="amount">Saldo</th><th>Estado</th><th></th></tr>
           </thead>
           <tbody id="tbody-faturas"></tbody>
         </table>
@@ -95,6 +97,26 @@
         </table>
         <div id="sem-clientes" hidden style="padding:24px;font-size:13px;color:var(--muted);text-align:center">
           Sem clientes registados. <a href="#" onclick="abrirNovoCliente();return false">Adicionar o primeiro →</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ Tab Notas de Crédito ══ -->
+    <div class="tab-panel" data-panel="tab-creditos" hidden>
+      <div class="alert alert-info" style="margin-bottom:20px">
+        <span class="alert-icon">ℹ</span>
+        <div>Uma nota de crédito pode ser aplicada (abatida) em várias faturas do mesmo cliente. Crie a partir de uma fatura emitida e depois aplique o saldo onde for necessário.</div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <div><h2>Notas de Crédito</h2><p id="cred-count-label">— notas</p></div>
+        </div>
+        <table class="data-table" id="tbl-creditos">
+          <thead><tr><th>Número</th><th>Data</th><th>Cliente</th><th>Motivo</th><th class="amount">Total</th><th class="amount">Aplicado</th><th class="amount">Disponível</th><th>Estado</th><th></th></tr></thead>
+          <tbody id="tbody-creditos"></tbody>
+        </table>
+        <div id="sem-creditos" hidden style="padding:24px;font-size:13px;color:var(--muted);text-align:center">
+          Sem notas de crédito emitidas. <a href="#" onclick="abrirNovaNotaCredito();return false">Criar a primeira →</a>
         </div>
       </div>
     </div>
@@ -197,6 +219,75 @@
   </div>
 </div>
 
+<!-- ══ Modal Nova Nota de Crédito (a partir de uma fatura) ══ -->
+<div id="modal-credito" class="modal" hidden>
+  <div class="modal-backdrop"></div>
+  <div style="position:relative;background:var(--bg-card);border-radius:12px;padding:32px;width:680px;max-width:96vw;max-height:92vh;overflow-y:auto;box-shadow:var(--shadow-lg)">
+    <h2 style="font-family:'DM Serif Display',serif;font-size:22px;color:var(--text);margin-bottom:4px">Nova Nota de Crédito</h2>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:20px">Escolha a fatura de origem — as linhas são pré-preenchidas e podem ser ajustadas para devoluções parciais.</p>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Fatura de Origem *</label>
+        <select class="form-select" id="ncr-fatura-origem" onchange="aoEscolherFaturaOrigem()"></select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Data *</label>
+        <input type="date" class="form-input" id="ncr-data"/>
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Motivo *</label>
+      <input class="form-input" id="ncr-motivo" placeholder="Ex: Devolução de mercadoria, erro de faturação…"/>
+    </div>
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin:18px 0 8px">
+      <label class="form-label" style="margin:0">Linhas a Devolver</label>
+    </div>
+    <div id="linhas-credito" style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px"></div>
+    <p style="font-size:12px;color:var(--muted);margin-top:4px">Ajuste a quantidade ou preço para uma devolução parcial. Remova linhas que não fazem parte da devolução.</p>
+
+    <div style="background:var(--bg-table-head);border:1px solid var(--border);border-radius:8px;padding:14px 18px;margin:16px 0 18px;display:flex;justify-content:flex-end;gap:28px;font-size:13px">
+      <div><div style="color:var(--muted);font-size:11px">Base</div><div id="nc-base" style="font-weight:600">—</div></div>
+      <div><div style="color:var(--muted);font-size:11px">IVA</div><div id="nc-iva" style="font-weight:600;color:var(--danger)">—</div></div>
+      <div><div style="color:var(--muted);font-size:11px">Total</div><div id="nc-total" style="font-weight:700;color:var(--text);font-size:16px">—</div></div>
+    </div>
+
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn btn-outline" onclick="closeModal('modal-credito')">Cancelar</button>
+      <button class="btn btn-gold" onclick="guardarNotaCredito()">Criar Nota de Crédito</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ Modal Aplicar Nota de Crédito em Faturas (N:N) ══ -->
+<div id="modal-aplicar-credito" class="modal" hidden>
+  <div class="modal-backdrop"></div>
+  <div style="position:relative;background:var(--bg-card);border-radius:12px;padding:32px;width:680px;max-width:96vw;max-height:92vh;overflow-y:auto;box-shadow:var(--shadow-lg)">
+    <h2 style="font-family:'DM Serif Display',serif;font-size:22px;color:var(--text);margin-bottom:4px">Aplicar Nota de Crédito <span id="apl-cred-numero"></span></h2>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:4px">Cliente: <strong id="apl-cred-cliente"></strong></p>
+    <input type="hidden" id="apl-cred-id"/>
+
+    <div style="display:flex;gap:24px;margin:16px 0 20px;font-size:13px;background:var(--bg-table-head);border:1px solid var(--border);border-radius:8px;padding:14px 18px">
+      <div><div style="color:var(--muted);font-size:11px">Total da Nota</div><div id="apl-cred-total" style="font-weight:600">—</div></div>
+      <div><div style="color:var(--muted);font-size:11px">Já Aplicado</div><div id="apl-cred-aplicado" style="font-weight:600">—</div></div>
+      <div><div style="color:var(--muted);font-size:11px">Disponível</div><div id="apl-cred-disponivel" style="font-weight:700;color:var(--success);font-size:16px">—</div></div>
+    </div>
+
+    <h3 style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:8px">Faturas Abertas do Cliente</h3>
+    <div id="lista-faturas-abertas" style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px"></div>
+    <p id="sem-faturas-abertas" hidden style="font-size:13px;color:var(--muted);text-align:center;padding:16px">Este cliente não tem faturas com saldo em dívida.</p>
+
+    <h3 style="font-size:13px;font-weight:700;color:var(--text);margin:20px 0 8px">Histórico de Aplicações desta Nota</h3>
+    <div id="historico-aplicacoes" style="display:flex;flex-direction:column;gap:6px"></div>
+    <p id="sem-aplicacoes" hidden style="font-size:13px;color:var(--muted);text-align:center;padding:12px">Ainda não foi aplicada em nenhuma fatura.</p>
+
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px">
+      <button class="btn btn-outline" onclick="closeModal('modal-aplicar-credito')">Fechar</button>
+    </div>
+  </div>
+</div>
+
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
@@ -221,22 +312,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   await renderStats();
   await renderFaturas();
   await renderClientes();
+  await renderNotasCredito();
 });
 
 /* ══════════ Stats ══════════ */
 async function renderStats() {
-  const [faturas, clientes] = await Promise.all([ DB.getFaturas(empresaId), DB.getClientes(empresaId) ]);
+  const [faturas, clientes, notasCredito] = await Promise.all([ DB.getFaturas(empresaId), DB.getClientes(empresaId), DB.getNotasCredito(empresaId) ]);
   const hoje = new Date();
   const mesAtual = hoje.toISOString().slice(0,7);
 
   const faturadoMes = faturas.filter(f => f.estado!=='rascunho' && (f.data||'').startsWith(mesAtual))
                               .reduce((s,f)=>s+f.valorTotal,0);
-  const pendente = faturas.filter(f => f.estado==='emitida').reduce((s,f)=>s+f.valorTotal,0);
+  // saldo líquido pendente: total das faturas emitidas menos o que já foi abatido por notas de crédito
+  const pendente = faturas.filter(f => f.estado==='emitida')
+                           .reduce((s,f)=>s + Math.max(0, (f.valorTotal||0)-(f.valorAbatido||0)), 0);
   const rascunhos = faturas.filter(f => f.estado==='rascunho').length;
+  const creditoDisponivel = notasCredito.filter(n=>n.estado!=='anulada')
+                                         .reduce((s,n)=>s + Math.max(0, (n.valorTotal||0)-(n.valorAplicado||0)), 0);
 
   document.getElementById('fat-stats').innerHTML = `
     <div class="stat-card"><div class="stat-label">Faturado este Mês</div><div class="stat-value">${fmtEUR(faturadoMes)}</div><div class="stat-sub">${mesAtual}</div></div>
-    <div class="stat-card danger"><div class="stat-label">Pendente de Pagamento</div><div class="stat-value">${fmtEUR(pendente)}</div><div class="stat-sub">faturas emitidas</div></div>
+    <div class="stat-card danger"><div class="stat-label">Pendente de Pagamento</div><div class="stat-value">${fmtEUR(pendente)}</div><div class="stat-sub">saldo líquido</div></div>
+    <div class="stat-card"><div class="stat-label">Crédito Disponível</div><div class="stat-value">${fmtEUR(creditoDisponivel)}</div><div class="stat-sub">notas por aplicar</div></div>
     <div class="stat-card slate"><div class="stat-label">Rascunhos</div><div class="stat-value">${rascunhos}</div><div class="stat-sub">por emitir</div></div>
     <div class="stat-card green"><div class="stat-label">Clientes</div><div class="stat-value">${clientes.length}</div><div class="stat-sub">registados</div></div>
   `;
@@ -266,15 +363,17 @@ async function renderFaturas() {
 
   tbody.innerHTML = lista.map(f => {
     const cli = clientes.find(c=>c.id===f.clienteId);
+    const abatido = f.valorAbatido || 0;
+    const saldo = Math.max(0, (f.valorTotal||0) - abatido);
     return `
     <tr>
       <td class="mono" style="font-size:12px">${f.numero}</td>
       <td>${fmtDate(f.data)}</td>
       <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${cli?cli.nome:'<span style="color:var(--muted)">—</span>'}</td>
       <td>${f.dataVencimento?fmtDate(f.dataVencimento):'—'}</td>
-      <td class="amount">${fmtEUR(f.valorBase)}</td>
-      <td class="amount">${fmtEUR(f.valorIva)}</td>
       <td class="amount" style="font-weight:700">${fmtEUR(f.valorTotal)}</td>
+      <td class="amount" style="${abatido>0?'color:var(--danger)':'color:var(--muted)'}">${abatido>0?'−'+fmtEUR(abatido):'—'}</td>
+      <td class="amount" style="font-weight:700">${fmtEUR(saldo)}</td>
       <td><span class="badge ${estadoBadge[f.estado]}">${estadoLabel[f.estado]}</span></td>
       <td style="display:flex;gap:4px;justify-content:flex-end">
         <button class="btn btn-outline btn-sm" title="Ver" onclick="verFatura('${f.id}')">👁</button>
@@ -435,12 +534,16 @@ async function apagarFatura(id) {
 }
 
 async function verFatura(id) {
-  const [faturas, clientes, emp] = await Promise.all([ DB.getFaturas(empresaId), DB.getClientes(empresaId), DB.empresaActiva() ]);
+  const [faturas, clientes, emp, aplicacoes, notasCredito] = await Promise.all([
+    DB.getFaturas(empresaId), DB.getClientes(empresaId), DB.empresaActiva(),
+    DB.getAplicacoesPorFatura(empresaId, id), DB.getNotasCredito(empresaId),
+  ]);
   const f = faturas.find(x=>x.id===id);
   if (!f) return;
   const cli = clientes.find(c=>c.id===f.clienteId);
   const estadoBadge = { rascunho:'badge-muted', emitida:'badge-gold', paga:'badge-green' };
   const estadoLabel = { rascunho:'Rascunho', emitida:'Emitida', paga:'Paga' };
+  const saldo = Math.max(0, (f.valorTotal||0) - (f.valorAbatido||0));
 
   document.getElementById('ver-fatura-box').innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px">
@@ -468,11 +571,26 @@ async function verFatura(id) {
           </tr>`).join('')}
       </tbody>
     </table>
-    <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;font-size:13px;margin-bottom:24px">
+    <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;font-size:13px;margin-bottom:${aplicacoes.length?12:24}px">
       <div style="display:flex;gap:16px"><span style="color:var(--muted)">Base</span><strong style="min-width:90px;text-align:right">${fmtEUR(f.valorBase)}</strong></div>
       <div style="display:flex;gap:16px"><span style="color:var(--muted)">IVA</span><strong style="min-width:90px;text-align:right;color:var(--danger)">${fmtEUR(f.valorIva)}</strong></div>
       <div style="display:flex;gap:16px;font-size:18px"><span style="color:var(--muted);font-size:13px;align-self:center">Total</span><strong style="min-width:90px;text-align:right;font-family:'DM Serif Display',serif">${fmtEUR(f.valorTotal)}</strong></div>
     </div>
+    ${aplicacoes.length ? `
+    <div style="margin-bottom:24px">
+      <div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:8px">Abatimentos por Notas de Crédito</div>
+      ${aplicacoes.map(a=>{
+        const nc = notasCredito.find(n=>n.id===a.notaCreditoId);
+        return `<div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0">
+          <span>${nc?nc.numero:'—'} <span style="color:var(--muted);font-size:11px">— ${fmtDate(a.criadaEm)}</span></span>
+          <strong style="color:var(--danger)">−${fmtEUR(a.valorAbatido)}</strong>
+        </div>`;
+      }).join('')}
+      <div style="display:flex;justify-content:flex-end;gap:16px;margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
+        <span style="color:var(--muted);font-size:13px;align-self:center">Saldo em Dívida</span>
+        <strong style="font-family:'DM Serif Display',serif;font-size:18px">${fmtEUR(saldo)}</strong>
+      </div>
+    </div>` : ''}
     ${f.lancamentoId?`<div class="alert alert-info" style="margin-bottom:16px"><span class="alert-icon">📒</span><div>Lançamento gerado no diário de Vendas (documento ${f.numero}).</div></div>`:''}
     <div style="display:flex;gap:10px;justify-content:flex-end">
       <button class="btn btn-outline" onclick="closeModal('modal-ver-fatura')">Fechar</button>
@@ -573,6 +691,248 @@ async function apagarCliente(id) {
   if (ok === false) { showToast('Não é possível apagar: cliente tem faturas associadas','danger'); return; }
   showToast('Cliente apagado','warning');
   await renderClientes();
+  await renderStats();
+}
+
+/* ══════════ Notas de Crédito ══════════ */
+let _linhasCreditoAtuais = [];
+let _faturasParaOrigem = [];
+
+async function renderNotasCredito() {
+  const [notas, clientes] = await Promise.all([ DB.getNotasCredito(empresaId), DB.getClientes(empresaId) ]);
+  document.getElementById('cred-count-label').textContent = `${notas.length} notas`;
+  const tbody = document.getElementById('tbody-creditos');
+  const semEl = document.getElementById('sem-creditos');
+
+  if (notas.length === 0) { tbody.innerHTML=''; semEl.hidden=false; return; }
+  semEl.hidden = true;
+
+  const estadoBadge = { aberta:'badge-gold', aplicada:'badge-green', anulada:'badge-muted' };
+  const estadoLabel = { aberta:'Aberta', aplicada:'Aplicada', anulada:'Anulada' };
+
+  tbody.innerHTML = notas.map(n => {
+    const cli = clientes.find(c=>c.id===n.clienteId);
+    const disponivel = Math.max(0, (n.valorTotal||0) - (n.valorAplicado||0));
+    return `
+    <tr>
+      <td class="mono" style="font-size:12px">${n.numero}</td>
+      <td>${fmtDate(n.data)}</td>
+      <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${cli?cli.nome:'—'}</td>
+      <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;color:var(--muted)" title="${n.motivo}">${n.motivo||'—'}</td>
+      <td class="amount" style="font-weight:700">${fmtEUR(n.valorTotal)}</td>
+      <td class="amount">${n.valorAplicado>0?fmtEUR(n.valorAplicado):'—'}</td>
+      <td class="amount" style="${disponivel>0&&n.estado!=='anulada'?'font-weight:700;color:var(--success)':'color:var(--muted)'}">${n.estado==='anulada'?'—':fmtEUR(disponivel)}</td>
+      <td><span class="badge ${estadoBadge[n.estado]}">${estadoLabel[n.estado]}</span></td>
+      <td style="display:flex;gap:4px;justify-content:flex-end">
+        ${n.estado!=='anulada'?`<button class="btn btn-gold btn-sm" onclick="abrirAplicarCredito('${n.id}')">Aplicar →</button>`:''}
+        ${n.valorAplicado===0?`<button class="btn btn-sm" style="background:rgba(176,58,46,0.1);color:var(--danger);border:1px solid rgba(176,58,46,0.2)" title="Anular" onclick="anularCredito('${n.id}')">✕</button>`:''}
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+async function abrirNovaNotaCredito() {
+  document.getElementById('ncr-data').value = DB.today();
+  document.getElementById('ncr-motivo').value = '';
+
+  // só faturas emitidas/pagas com saldo em dívida podem originar uma nota de crédito
+  const [faturas, clientes] = await Promise.all([ DB.getFaturas(empresaId), DB.getClientes(empresaId) ]);
+  _faturasParaOrigem = faturas.filter(f => f.estado !== 'rascunho');
+
+  const sel = document.getElementById('ncr-fatura-origem');
+  if (_faturasParaOrigem.length === 0) {
+    sel.innerHTML = `<option value="">Sem faturas emitidas disponíveis</option>`;
+    showToast('Precisa de ter pelo menos uma fatura emitida para criar uma nota de crédito','danger');
+    return;
+  }
+  sel.innerHTML = _faturasParaOrigem.map(f => {
+    const cli = clientes.find(c=>c.id===f.clienteId);
+    return `<option value="${f.id}">${f.numero} — ${cli?cli.nome:'Cliente'} (${fmtEUR(f.valorTotal)})</option>`;
+  }).join('');
+
+  aoEscolherFaturaOrigem();
+  openModal('modal-credito');
+}
+
+function aoEscolherFaturaOrigem() {
+  const faturaId = document.getElementById('ncr-fatura-origem').value;
+  const fat = _faturasParaOrigem.find(f=>f.id===faturaId);
+  if (!fat) { _linhasCreditoAtuais = []; renderLinhasCredito(); return; }
+  // pré-popula com as linhas da fatura de origem, prontas a ajustar para devolução parcial
+  _linhasCreditoAtuais = (fat.linhas||[]).map((l,idx) => ({ ...l, _id: 'lc'+idx+'_'+Date.now() }));
+  renderLinhasCredito();
+}
+
+function renderLinhasCredito() {
+  const wrap = document.getElementById('linhas-credito');
+  wrap.innerHTML = _linhasCreditoAtuais.map(l => `
+    <div style="display:grid;grid-template-columns:1fr 70px 100px 90px 100px 32px;gap:8px;align-items:center" data-linha="${l._id}">
+      <input class="form-input" value="${(l.descricao||'').replace(/"/g,'&quot;')}" oninput="atualizarLinhaCredito('${l._id}','descricao',this.value)"/>
+      <input class="form-input" type="number" min="0" step="1" value="${l.quantidade}" oninput="atualizarLinhaCredito('${l._id}','quantidade',this.value)" title="Quantidade"/>
+      <input class="form-input" type="number" min="0" step="0.01" value="${l.precoUnit}" oninput="atualizarLinhaCredito('${l._id}','precoUnit',this.value)" title="Preço unitário (€)"/>
+      <select class="form-select" onchange="atualizarLinhaCredito('${l._id}','taxaIva',this.value)">
+        <option value="0" ${l.taxaIva==0?'selected':''}>Isento</option>
+        <option value="6" ${l.taxaIva==6?'selected':''}>6%</option>
+        <option value="13" ${l.taxaIva==13?'selected':''}>13%</option>
+        <option value="23" ${l.taxaIva==23?'selected':''}>23%</option>
+      </select>
+      <div style="font-size:13px;font-weight:600;text-align:right;padding-right:4px">${fmtEUR((parseFloat(l.quantidade)||0)*(parseFloat(l.precoUnit)||0)*(1+(parseFloat(l.taxaIva)||0)/100))}</div>
+      <button class="btn btn-sm" style="background:rgba(176,58,46,0.1);color:var(--danger);border:1px solid rgba(176,58,46,0.2);padding:6px 8px" onclick="removerLinhaCredito('${l._id}')" title="Remover linha">✕</button>
+    </div>
+  `).join('') || '<p style="font-size:13px;color:var(--muted);text-align:center;padding:12px">Sem linhas. Escolha uma fatura de origem.</p>';
+  atualizarTotaisCreditoPreview();
+}
+
+function removerLinhaCredito(id) {
+  _linhasCreditoAtuais = _linhasCreditoAtuais.filter(l=>l._id!==id);
+  renderLinhasCredito();
+}
+
+function atualizarLinhaCredito(id, campo, valor) {
+  const l = _linhasCreditoAtuais.find(x=>x._id===id);
+  if (!l) return;
+  l[campo] = (campo==='descricao') ? valor : (parseFloat(valor)||0);
+  renderLinhasCredito();
+}
+
+function atualizarTotaisCreditoPreview() {
+  let base=0, iva=0;
+  _linhasCreditoAtuais.forEach(l=>{
+    const sub = (parseFloat(l.quantidade)||0)*(parseFloat(l.precoUnit)||0);
+    base += sub;
+    iva  += sub*(parseFloat(l.taxaIva)||0)/100;
+  });
+  document.getElementById('nc-base').textContent = fmtEUR(base);
+  document.getElementById('nc-iva').textContent  = fmtEUR(iva);
+  document.getElementById('nc-total').textContent= fmtEUR(base+iva);
+}
+
+async function guardarNotaCredito() {
+  const faturaId = document.getElementById('ncr-fatura-origem').value;
+  const fat = _faturasParaOrigem.find(f=>f.id===faturaId);
+  if (!fat) { showToast('Selecione a fatura de origem','danger'); return; }
+  const motivo = document.getElementById('ncr-motivo').value.trim();
+  if (!motivo) { showToast('Indique o motivo da nota de crédito','danger'); return; }
+  const linhasValidas = _linhasCreditoAtuais.filter(l => l.descricao && l.descricao.trim() && (parseFloat(l.quantidade)||0) > 0);
+  if (linhasValidas.length === 0) { showToast('Adicione pelo menos uma linha a devolver','danger'); return; }
+
+  const nova = await DB.addNotaCredito(empresaId, {
+    clienteId: fat.clienteId,
+    faturaOrigemId: fat.id,
+    data: document.getElementById('ncr-data').value || DB.today(),
+    motivo,
+    linhas: linhasValidas.map(({_id, ...rest})=>rest),
+  });
+
+  closeModal('modal-credito');
+  showToast(`Nota de crédito ${nova.numero} criada`,'success');
+  await renderNotasCredito();
+  await renderStats();
+}
+
+async function anularCredito(id) {
+  if (!confirm('Anular esta nota de crédito? Só é possível se ainda não tiver sido aplicada em nenhuma fatura.')) return;
+  const ok = await DB.anularNotaCredito(empresaId, id);
+  if (ok === false) { showToast('Não é possível anular: já tem aplicações. Remova-as primeiro.','danger'); return; }
+  showToast('Nota de crédito anulada','warning');
+  await renderNotasCredito();
+}
+
+/* ── Aplicar nota de crédito em múltiplas faturas (N:N) ── */
+async function abrirAplicarCredito(notaCreditoId) {
+  document.getElementById('apl-cred-id').value = notaCreditoId;
+  await renderModalAplicarCredito();
+  openModal('modal-aplicar-credito');
+}
+
+async function renderModalAplicarCredito() {
+  const notaCreditoId = document.getElementById('apl-cred-id').value;
+  const [notas, faturas, clientes, aplicacoes] = await Promise.all([
+    DB.getNotasCredito(empresaId), DB.getFaturas(empresaId), DB.getClientes(empresaId),
+    DB.getAplicacoesPorCredito(empresaId, notaCreditoId),
+  ]);
+  const nc = notas.find(n=>n.id===notaCreditoId);
+  if (!nc) return;
+  const cli = clientes.find(c=>c.id===nc.clienteId);
+  const disponivel = Math.max(0, (nc.valorTotal||0) - (nc.valorAplicado||0));
+
+  document.getElementById('apl-cred-numero').textContent = `— ${nc.numero}`;
+  document.getElementById('apl-cred-cliente').textContent = cli ? cli.nome : '—';
+  document.getElementById('apl-cred-total').textContent = fmtEUR(nc.valorTotal);
+  document.getElementById('apl-cred-aplicado').textContent = fmtEUR(nc.valorAplicado||0);
+  document.getElementById('apl-cred-disponivel').textContent = fmtEUR(disponivel);
+
+  // faturas do mesmo cliente com saldo em dívida (exclui rascunhos)
+  const faturasAbertas = faturas.filter(f => f.clienteId === nc.clienteId && f.estado !== 'rascunho' && ((f.valorTotal||0)-(f.valorAbatido||0)) > 0.005);
+  const listaEl = document.getElementById('lista-faturas-abertas');
+  const semEl = document.getElementById('sem-faturas-abertas');
+
+  if (faturasAbertas.length === 0 || disponivel <= 0.005) {
+    listaEl.innerHTML = '';
+    semEl.hidden = false;
+  } else {
+    semEl.hidden = true;
+    listaEl.innerHTML = faturasAbertas.map(f => {
+      const saldo = Math.max(0, (f.valorTotal||0) - (f.valorAbatido||0));
+      const sugestao = Math.min(saldo, disponivel);
+      return `
+      <div style="display:grid;grid-template-columns:1fr 90px 130px auto;gap:8px;align-items:center;padding:8px 10px;border:1px solid var(--border);border-radius:8px">
+        <div>
+          <div style="font-size:13px;font-weight:600">${f.numero}</div>
+          <div style="font-size:11px;color:var(--muted)">Saldo em dívida: ${fmtEUR(saldo)}</div>
+        </div>
+        <div style="font-size:11px;color:var(--muted)">€</div>
+        <input class="form-input" type="number" min="0" step="0.01" max="${Math.min(saldo,disponivel).toFixed(2)}" value="${sugestao.toFixed(2)}" id="valor-aplicar-${f.id}" style="text-align:right"/>
+        <button class="btn btn-gold btn-sm" onclick="confirmarAplicarCredito('${f.id}')">Aplicar</button>
+      </div>`;
+    }).join('');
+  }
+
+  // histórico de aplicações já feitas com esta nota
+  const histEl = document.getElementById('historico-aplicacoes');
+  const semHistEl = document.getElementById('sem-aplicacoes');
+  if (aplicacoes.length === 0) {
+    histEl.innerHTML = '';
+    semHistEl.hidden = false;
+  } else {
+    semHistEl.hidden = true;
+    histEl.innerHTML = aplicacoes.map(a => {
+      const fat = faturas.find(f=>f.id===a.faturaId);
+      return `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;background:var(--bg-table-head);border-radius:6px;font-size:13px">
+        <span>${fat?fat.numero:'(fatura removida)'} <span style="color:var(--muted);font-size:11px">— ${fmtDate(a.criadaEm)}</span></span>
+        <span style="display:flex;align-items:center;gap:10px">
+          <strong>${fmtEUR(a.valorAbatido)}</strong>
+          <button class="btn btn-sm" style="background:rgba(176,58,46,0.1);color:var(--danger);border:1px solid rgba(176,58,46,0.2);padding:3px 8px" title="Remover aplicação" onclick="removerAplicacao('${a.id}')">✕</button>
+        </span>
+      </div>`;
+    }).join('');
+  }
+}
+
+async function confirmarAplicarCredito(faturaId) {
+  const notaCreditoId = document.getElementById('apl-cred-id').value;
+  const valor = parseFloat(document.getElementById(`valor-aplicar-${faturaId}`).value) || 0;
+  if (valor <= 0) { showToast('Indique um valor superior a 0','danger'); return; }
+  try {
+    await DB.aplicarCreditoEmFatura(empresaId, notaCreditoId, faturaId, valor);
+    showToast('Crédito aplicado com sucesso','success');
+    await renderModalAplicarCredito();
+    await renderNotasCredito();
+    await renderFaturas();
+    await renderStats();
+  } catch (e) {
+    showToast(e.message,'danger');
+  }
+}
+
+async function removerAplicacao(aplicacaoId) {
+  if (!confirm('Remover esta aplicação? O valor volta a ficar disponível na nota de crédito e a dívida da fatura é reposta.')) return;
+  await DB.removerAplicacaoCredito(empresaId, aplicacaoId);
+  showToast('Aplicação removida','warning');
+  await renderModalAplicarCredito();
+  await renderNotasCredito();
+  await renderFaturas();
   await renderStats();
 }
 </script>

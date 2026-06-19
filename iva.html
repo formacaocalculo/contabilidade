@@ -292,7 +292,141 @@ async function apurarIVA() { await calcularApuramento(); showToast('Apuramento c
 async function gerarSAFT() {
   const emp   = await DB.empresaActiva();
   const lancs = await DB.getLancamentos(empresaId);
+  const [faturas, notasCredito, clientes] = await Promise.all([
+    DB.getFaturas(empresaId), DB.getNotasCredito(empresaId), DB.getClientes(empresaId),
+  ]);
   const hoje  = DB.today();
+  const esc = (s) => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+  // só documentos não-rascunho entram no SAF-T (FT emitida/paga; NC sempre que criada, exceto anuladas)
+  const faturasValidas = faturas.filter(f => f.estado !== 'rascunho');
+  const notasValidas    = notasCredito.filter(n => n.estado !== 'anulada');
+
+  // ── MasterFiles / Customer ──────────────────────────────
+  const customerXml = clientes.map(c => `
+    <Customer>
+      <CustomerID>${esc(c.id)}</CustomerID>
+      <AccountID>Desconhecido</AccountID>
+      <CustomerTaxID>${esc(c.nif||'999999990')}</CustomerTaxID>
+      <CompanyName>${esc(c.nome)}</CompanyName>
+      <BillingAddress>
+        <AddressDetail>${esc(c.morada||'Desconhecido')}</AddressDetail>
+        <City>Desconhecido</City>
+        <PostalCode>0000-000</PostalCode>
+        <Country>PT</Country>
+      </BillingAddress>
+      <SelfBillingIndicator>0</SelfBillingIndicator>
+    </Customer>`).join('');
+
+  // ── SourceDocuments / SalesInvoices / Invoice (Faturas — InvoiceType FT) ──
+  const invoiceXml = faturasValidas.map(f => {
+    const taxaPredominante = (f.linhas||[]).reduce((max,l)=> (parseFloat(l.taxaIva)||0) > max ? (parseFloat(l.taxaIva)||0) : max, 0);
+    return `
+    <Invoice>
+      <InvoiceNo>${esc(f.numero)}</InvoiceNo>
+      <DocumentStatus>
+        <InvoiceStatus>N</InvoiceStatus>
+        <InvoiceStatusDate>${f.criadaEm||hoje}T00:00:00</InvoiceStatusDate>
+        <SourceID>ContaSNC</SourceID>
+        <SourceBilling>P</SourceBilling>
+      </DocumentStatus>
+      <Hash>0</Hash>
+      <HashControl>1</HashControl>
+      <Period>${f.data?.slice(5,7)||'01'}</Period>
+      <InvoiceDate>${f.data||hoje}</InvoiceDate>
+      <InvoiceType>FT</InvoiceType>
+      <SpecialRegimes>
+        <SelfBillingIndicator>0</SelfBillingIndicator>
+        <CashVATSchemeIndicator>0</CashVATSchemeIndicator>
+        <ThirdPartiesBillingIndicator>0</ThirdPartiesBillingIndicator>
+      </SpecialRegimes>
+      <SourceID>ContaSNC</SourceID>
+      <SystemEntryDate>${f.criadaEm||hoje}T00:00:00</SystemEntryDate>
+      <CustomerID>${esc(f.clienteId)}</CustomerID>
+      ${(f.linhas||[]).map((l,idx)=>`
+      <Line>
+        <LineNumber>${idx+1}</LineNumber>
+        <ProductDescription>${esc(l.descricao)}</ProductDescription>
+        <Quantity>${l.quantidade}</Quantity>
+        <UnitOfMeasure>UN</UnitOfMeasure>
+        <UnitPrice>${(parseFloat(l.precoUnit)||0).toFixed(2)}</UnitPrice>
+        <TaxPointDate>${f.data||hoje}</TaxPointDate>
+        <Description>${esc(l.descricao)}</Description>
+        <CreditAmount>${((parseFloat(l.quantidade)||0)*(parseFloat(l.precoUnit)||0)).toFixed(2)}</CreditAmount>
+        <Tax>
+          <TaxType>IVA</TaxType>
+          <TaxCountryRegion>PT</TaxCountryRegion>
+          <TaxCode>${l.taxaIva==23?'NOR':l.taxaIva==13?'INT':l.taxaIva==6?'RED':'ISE'}</TaxCode>
+          <TaxPercentage>${l.taxaIva||0}</TaxPercentage>
+        </Tax>
+      </Line>`).join('')}
+      <DocumentTotals>
+        <TaxPayable>${(f.valorIva||0).toFixed(2)}</TaxPayable>
+        <NetTotal>${(f.valorBase||0).toFixed(2)}</NetTotal>
+        <GrossTotal>${(f.valorTotal||0).toFixed(2)}</GrossTotal>
+      </DocumentTotals>
+    </Invoice>`;
+  }).join('');
+
+  // ── SourceDocuments / SalesInvoices / Invoice (Notas de Crédito — InvoiceType NC) ──
+  // Referenciam o documento de origem via <References> (requisito de auditoria SAF-T)
+  const creditNoteXml = notasValidas.map(n => `
+    <Invoice>
+      <InvoiceNo>${esc(n.numero)}</InvoiceNo>
+      <DocumentStatus>
+        <InvoiceStatus>N</InvoiceStatus>
+        <InvoiceStatusDate>${n.criadaEm||hoje}T00:00:00</InvoiceStatusDate>
+        <SourceID>ContaSNC</SourceID>
+        <SourceBilling>P</SourceBilling>
+      </DocumentStatus>
+      <Hash>0</Hash>
+      <HashControl>1</HashControl>
+      <Period>${n.data?.slice(5,7)||'01'}</Period>
+      <InvoiceDate>${n.data||hoje}</InvoiceDate>
+      <InvoiceType>NC</InvoiceType>
+      <SpecialRegimes>
+        <SelfBillingIndicator>0</SelfBillingIndicator>
+        <CashVATSchemeIndicator>0</CashVATSchemeIndicator>
+        <ThirdPartiesBillingIndicator>0</ThirdPartiesBillingIndicator>
+      </SpecialRegimes>
+      <SourceID>ContaSNC</SourceID>
+      <SystemEntryDate>${n.criadaEm||hoje}T00:00:00</SystemEntryDate>
+      <CustomerID>${esc(n.clienteId)}</CustomerID>
+      ${n.faturaOrigemId ? (() => {
+        const origem = faturasValidas.find(f=>f.id===n.faturaOrigemId);
+        return `<References>
+        <Reference>${esc(origem?origem.numero:n.faturaOrigemId)}</Reference>
+        <Reason>${esc(n.motivo)}</Reason>
+      </References>`;
+      })() : ''}
+      ${(n.linhas||[]).map((l,idx)=>`
+      <Line>
+        <LineNumber>${idx+1}</LineNumber>
+        <ProductDescription>${esc(l.descricao)}</ProductDescription>
+        <Quantity>${l.quantidade}</Quantity>
+        <UnitOfMeasure>UN</UnitOfMeasure>
+        <UnitPrice>${(parseFloat(l.precoUnit)||0).toFixed(2)}</UnitPrice>
+        <TaxPointDate>${n.data||hoje}</TaxPointDate>
+        <Description>${esc(l.descricao)}</Description>
+        <DebitAmount>${((parseFloat(l.quantidade)||0)*(parseFloat(l.precoUnit)||0)).toFixed(2)}</DebitAmount>
+        <Tax>
+          <TaxType>IVA</TaxType>
+          <TaxCountryRegion>PT</TaxCountryRegion>
+          <TaxCode>${l.taxaIva==23?'NOR':l.taxaIva==13?'INT':l.taxaIva==6?'RED':'ISE'}</TaxCode>
+          <TaxPercentage>${l.taxaIva||0}</TaxPercentage>
+        </Tax>
+      </Line>`).join('')}
+      <DocumentTotals>
+        <TaxPayable>${(n.valorIva||0).toFixed(2)}</TaxPayable>
+        <NetTotal>${(n.valorBase||0).toFixed(2)}</NetTotal>
+        <GrossTotal>${(n.valorTotal||0).toFixed(2)}</GrossTotal>
+      </DocumentTotals>
+    </Invoice>`).join('');
+
+  const todosDocumentos = faturasValidas.length + notasValidas.length;
+  const totalDebitoDocs  = notasValidas.reduce((s,n)=>s+(n.valorTotal||0),0);
+  const totalCreditoDocs = faturasValidas.reduce((s,f)=>s+(f.valorTotal||0),0);
+
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <AuditFile xmlns="urn:OECD:StandardAuditFile-Tax:PT_1.04_01">
   <Header>
@@ -300,9 +434,9 @@ async function gerarSAFT() {
     <CompanyID>${emp.nif||'000000000'}</CompanyID>
     <TaxRegistrationNumber>${emp.nif||'000000000'}</TaxRegistrationNumber>
     <TaxAccountingBasis>F</TaxAccountingBasis>
-    <CompanyName>${emp.nome}</CompanyName>
-    <BusinessName>${emp.nome}</BusinessName>
-    <CompanyAddress><AddressDetail>${emp.morada||''}</AddressDetail><City>Lisboa</City><PostalCode>1000-001</PostalCode><Country>PT</Country></CompanyAddress>
+    <CompanyName>${esc(emp.nome)}</CompanyName>
+    <BusinessName>${esc(emp.nome)}</BusinessName>
+    <CompanyAddress><AddressDetail>${esc(emp.morada||'Desconhecido')}</AddressDetail><City>Lisboa</City><PostalCode>1000-001</PostalCode><Country>PT</Country></CompanyAddress>
     <FiscalYear>${emp.exercicio}</FiscalYear>
     <StartDate>${emp.exercicio}-01-01</StartDate>
     <EndDate>${emp.exercicio}-12-31</EndDate>
@@ -314,6 +448,9 @@ async function gerarSAFT() {
     <ProductID>ContaSNC</ProductID>
     <ProductVersion>1.0</ProductVersion>
   </Header>
+  <MasterFiles>
+    <Customer>${customerXml}</Customer>
+  </MasterFiles>
   <GeneralLedgerEntries>
     <NumberOfEntries>${lancs.length}</NumberOfEntries>
     <TotalDebit>${lancs.reduce((s,l)=>s+(l.valorTotal||l.valorBase||0),0).toFixed(2)}</TotalDebit>
@@ -321,23 +458,32 @@ async function gerarSAFT() {
     ${lancs.map(l=>`
     <Journal>
       <JournalID>${l.diario}</JournalID>
-      <Description>${(l.descricao||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')}</Description>
+      <Description>${esc(l.descricao)}</Description>
       <Transaction>
         <TransactionID>${hoje.replace(/-/g,'')} ${l.documento||l.id}</TransactionID>
         <Period>${l.data?.slice(5,7)||'01'}</Period>
         <TransactionDate>${l.data||hoje}</TransactionDate>
         <SourceID>ContaSNC</SourceID>
-        <Description>${(l.descricao||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')}</Description>
-        <DocArchivalNumber>${l.documento||l.id}</DocArchivalNumber>
+        <Description>${esc(l.descricao)}</Description>
+        <DocArchivalNumber>${esc(l.documento||l.id)}</DocArchivalNumber>
         <TransactionType>N</TransactionType>
         <GLPostingDate>${l.data||hoje}</GLPostingDate>
         <Lines>
-          <DebitLine><RecordID>1</RecordID><AccountID>${l.contaDebito||'999'}</AccountID><SourceDocumentID>${l.documento||''}</SourceDocumentID><Description>${(l.descricao||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')}</Description><DebitAmount>${(l.valorTotal||l.valorBase||0).toFixed(2)}</DebitAmount></DebitLine>
-          <CreditLine><RecordID>2</RecordID><AccountID>${l.contaCredito||'999'}</AccountID><SourceDocumentID>${l.documento||''}</SourceDocumentID><Description>${(l.descricao||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')}</Description><CreditAmount>${(l.valorTotal||l.valorBase||0).toFixed(2)}</CreditAmount></CreditLine>
+          <DebitLine><RecordID>1</RecordID><AccountID>${l.contaDebito||'999'}</AccountID><SourceDocumentID>${esc(l.documento||'')}</SourceDocumentID><Description>${esc(l.descricao)}</Description><DebitAmount>${(l.valorTotal||l.valorBase||0).toFixed(2)}</DebitAmount></DebitLine>
+          <CreditLine><RecordID>2</RecordID><AccountID>${l.contaCredito||'999'}</AccountID><SourceDocumentID>${esc(l.documento||'')}</SourceDocumentID><Description>${esc(l.descricao)}</Description><CreditAmount>${(l.valorTotal||l.valorBase||0).toFixed(2)}</CreditAmount></CreditLine>
         </Lines>
       </Transaction>
     </Journal>`).join('')}
   </GeneralLedgerEntries>
+  <SourceDocuments>
+    <SalesInvoices>
+      <NumberOfEntries>${todosDocumentos}</NumberOfEntries>
+      <TotalDebit>${totalDebitoDocs.toFixed(2)}</TotalDebit>
+      <TotalCredit>${totalCreditoDocs.toFixed(2)}</TotalCredit>
+      ${invoiceXml}
+      ${creditNoteXml}
+    </SalesInvoices>
+  </SourceDocuments>
 </AuditFile>`;
 
   const blob = new Blob([xml], {type:'text/xml'});
@@ -345,7 +491,7 @@ async function gerarSAFT() {
   a.href = URL.createObjectURL(blob);
   a.download = `SAF-T_${emp.nif||'000000000'}_${hoje.replace(/-/g,'')}.xml`;
   a.click();
-  showToast('SAF-T(PT) gerado e descarregado','success');
+  showToast('SAF-T(PT) gerado e descarregado (inclui faturas e notas de crédito)','success');
 }
 
 function previewDP() {
