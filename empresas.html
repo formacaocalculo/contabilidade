@@ -46,6 +46,7 @@
     </div>
     <div style="display:flex;gap:8px;align-items:center">
       <button id="theme-btn" class="btn btn-outline btn-sm" onclick="toggleTema()" title="Modo claro/escuro" style="font-size:16px;padding:5px 10px"></button>
+      <a id="btn-admin" href="admin.html" class="btn btn-outline btn-sm" hidden style="border-color:var(--gold);color:var(--gold)">⚙ Administração</a>
       <button class="btn btn-outline btn-sm" onclick="importarEmpresa()">⬆ Importar</button>
       <input type="file" id="import-input" accept=".json" hidden onchange="handleImport(event)"/>
       <button class="btn btn-outline btn-sm" onclick="logout()" title="Terminar sessão">⎋ Sair</button>
@@ -214,8 +215,8 @@ async function renderEmpresas() {
 }
 
 /* ── Acções ── */
-function seleccionar(id) {
-  DB.setEmpresaActiva(id);
+async function seleccionar(id) {
+  await DB.setEmpresaActiva(id);
   location.href = 'index.html';
 }
 
@@ -270,7 +271,7 @@ async function guardarEmpresa() {
       await renderEmpresas();
     } else {
       const nova = await DB.criarEmpresa(dados);
-      DB.setEmpresaActiva(nova.id);
+      await DB.setEmpresaActiva(nova.id);
       fecharOv('ov-empresa');
       toast('Empresa criada! A entrar…','success');
       setTimeout(() => { location.href = 'index.html'; }, 900);
@@ -355,10 +356,12 @@ function updateThemeBtn() {
 
 /* ── Init ── */
 updateThemeBtn();
-window.authReady.then(user => {
+window.authReady.then(async user => {
   if (user) {
     document.getElementById('utilizador-label').textContent = `Sessão: ${user.email}`;
-    renderEmpresas();
+    await renderEmpresas();
+    const admin = await DB.isAdmin();
+    if (admin) document.getElementById('btn-admin').hidden = false;
   }
 });
 </script>

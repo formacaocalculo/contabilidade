@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>ContaSNC — Administração</title>
+  <link rel="stylesheet" href="style.css"/>
+  <script>(function(){var t=localStorage.getItem("snc_theme")||"light";document.documentElement.setAttribute("data-theme",t);})();</script>
+  <style>
+    body { padding:40px 16px; background:var(--cream); }
+    .adm-page { max-width:1100px; margin:0 auto; }
+    .adm-logo { display:flex; align-items:center; gap:14px; margin-bottom:32px; }
+    .adm-logo .logo-icon { width:48px;height:48px;background:var(--navy);border-radius:10px;display:flex;align-items:center;justify-content:center;font-family:'DM Serif Display',serif;font-size:24px;color:var(--gold);flex-shrink:0; }
+    .adm-logo h1 { font-family:'DM Serif Display',serif;font-size:26px;color:var(--navy);line-height:1.1; }
+    .adm-logo p { font-size:12px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:var(--muted); }
+    .sem-acesso { text-align:center;padding:60px 20px; }
+  </style>
+</head>
+<body>
+<div class="adm-page" id="adm-page" hidden>
+
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px">
+    <div class="adm-logo">
+      <div class="logo-icon">⚙</div>
+      <div>
+        <h1>Administração</h1>
+        <p>Visão global — todos os utilizadores</p>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <a href="empresas.html" class="btn btn-outline btn-sm">← Voltar às Minhas Empresas</a>
+      <button class="btn btn-outline btn-sm" onclick="logout()">⎋ Sair</button>
+    </div>
+  </div>
+
+  <div class="stats-grid" id="adm-stats" style="margin-bottom:28px"></div>
+
+  <div class="tabs" id="adm-tabs">
+    <button class="tab-btn" data-tab="tab-todas-empresas">Todas as Empresas</button>
+    <button class="tab-btn" data-tab="tab-lixeira">Lixeira (Backups)</button>
+  </div>
+
+  <!-- ══ Tab Todas as Empresas ══ -->
+  <div class="tab-panel" data-panel="tab-todas-empresas">
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-body" style="padding:16px 20px">
+        <input type="text" class="form-input" id="filtro-busca" placeholder="Pesquisar por nome, NIF ou email do utilizador…" oninput="renderTodasEmpresas()"/>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header"><div><h2>Empresas de Todos os Utilizadores</h2><p id="adm-count-label">— empresas</p></div></div>
+      <table class="data-table" id="tbl-adm-empresas">
+        <thead><tr><th>Empresa</th><th>NIF</th><th>Exercício</th><th>Dono (uid)</th><th>Criada em</th><th></th></tr></thead>
+        <tbody id="tbody-adm-empresas"></tbody>
+      </table>
+      <div id="sem-adm-empresas" hidden style="padding:24px;font-size:13px;color:var(--muted);text-align:center">Sem empresas registadas.</div>
+    </div>
+  </div>
+
+  <!-- ══ Tab Lixeira ══ -->
+  <div class="tab-panel" data-panel="tab-lixeira" hidden>
+    <div class="alert alert-gold" style="margin-bottom:20px">
+      <span class="alert-icon">⚠</span>
+      <div>Empresas eliminadas ficam guardadas aqui antes de serem apagadas em definitivo. Pode restaurá-las para o utilizador original, ou eliminá-las de forma permanente.</div>
+    </div>
+    <div class="card">
+      <div class="card-header"><div><h2>Empresas Eliminadas</h2><p id="lix-count-label">— na lixeira</p></div></div>
+      <table class="data-table" id="tbl-lixeira">
+        <thead><tr><th>Empresa</th><th>NIF</th><th>Dono original</th><th>Eliminada em</th><th></th></tr></thead>
+        <tbody id="tbody-lixeira"></tbody>
+      </table>
+      <div id="sem-lixeira" hidden style="padding:24px;font-size:13px;color:var(--muted);text-align:center">Lixeira vazia.</div>
+    </div>
+  </div>
+</div>
+
+<div id="sem-acesso" class="sem-acesso" hidden>
+  <h1 style="font-family:'DM Serif Display',serif;font-size:24px;color:var(--danger);margin-bottom:10px">Acesso Restrito</h1>
+  <p style="color:var(--muted);margin-bottom:20px">Esta área é exclusiva a administradores.</p>
+  <a href="empresas.html" class="btn btn-gold">← Voltar</a>
+</div>
+
+<!-- Toast container -->
+<div id="toasts" style="position:fixed;bottom:24px;right:24px;z-index:999;display:flex;flex-direction:column;gap:10px;pointer-events:none"></div>
+
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script src="auth-guard.js"></script>
+<script src="db.js"></script>
+<script>
+function fmtEUR(v) { return new Intl.NumberFormat('pt-PT',{style:'currency',currency:'EUR',minimumFractionDigits:2}).format(v||0); }
+function fmtDate(d) { if(!d) return '—'; const [y,m,day]=String(d).slice(0,10).split('-'); return day&&m&&y ? `${day}/${m}/${y}` : d; }
+
+function toast(msg, tipo) {
+  const cores = {success:'#2D7A4F',info:'#2E4066',warning:'#C9A84C',danger:'#B03A2E'};
+  const icons = {success:'✓',info:'ℹ',warning:'!',danger:'✕'};
+  const el = document.createElement('div');
+  el.style.cssText = `background:${cores[tipo]||cores.success};color:#fff;padding:12px 18px;border-radius:8px;font-family:Inter,sans-serif;font-size:13.5px;font-weight:500;box-shadow:0 4px 16px rgba(0,0,0,0.18);pointer-events:all;display:flex;align-items:center;gap:10px;min-width:220px`;
+  el.innerHTML = `<span>${icons[tipo]||'✓'}</span>${msg}`;
+  document.getElementById('toasts').appendChild(el);
+  setTimeout(()=>{ el.style.opacity='0'; el.style.transition='opacity .3s'; setTimeout(()=>el.remove(),300); }, 3000);
+}
+
+/* Tabs */
+document.getElementById('adm-tabs').addEventListener('click', e => {
+  const btn = e.target.closest('.tab-btn');
+  if (!btn) return;
+  document.querySelectorAll('#adm-tabs .tab-btn').forEach(b=>b.classList.toggle('active', b===btn));
+  document.querySelectorAll('.tab-panel').forEach(p => p.hidden = p.dataset.panel !== btn.dataset.tab);
+});
+document.querySelector('#adm-tabs .tab-btn').classList.add('active');
+
+let _todasEmpresas = [];
+let _emailsPorUid = {}; // cache simples uid -> email (preenchido a partir de admins/ + heurística, melhor-esforço)
+
+document.addEventListener('DOMContentLoaded', async () => {
+  const user = await window.authReady;
+  if (!user) return;
+
+  const admin = await DB.isAdmin();
+  if (!admin) {
+    document.getElementById('sem-acesso').hidden = false;
+    return;
+  }
+  document.getElementById('adm-page').hidden = false;
+
+  await renderStatsGlobais();
+  await renderTodasEmpresas();
+  await renderLixeira();
+});
+
+async function renderStatsGlobais() {
+  const [empresas, lixeira] = await Promise.all([ DB.getTodasEmpresasAdmin(), DB.getLixeira() ]);
+  _todasEmpresas = empresas;
+  const utilizadores = new Set(empresas.map(e=>e.donoUid)).size;
+
+  document.getElementById('adm-stats').innerHTML = `
+    <div class="stat-card"><div class="stat-label">Total de Empresas</div><div class="stat-value">${empresas.length}</div><div class="stat-sub">ativas</div></div>
+    <div class="stat-card slate"><div class="stat-label">Utilizadores com Empresas</div><div class="stat-value">${utilizadores}</div><div class="stat-sub">distintos</div></div>
+    <div class="stat-card danger"><div class="stat-label">Na Lixeira</div><div class="stat-value">${lixeira.length}</div><div class="stat-sub">backups disponíveis</div></div>
+  `;
+}
+
+async function renderTodasEmpresas() {
+  const filtro = (document.getElementById('filtro-busca').value || '').toLowerCase().trim();
+  let lista = _todasEmpresas;
+  if (filtro) {
+    lista = lista.filter(e =>
+      (e.nome||'').toLowerCase().includes(filtro) ||
+      (e.nif||'').toLowerCase().includes(filtro) ||
+      (e.donoUid||'').toLowerCase().includes(filtro)
+    );
+  }
+
+  document.getElementById('adm-count-label').textContent = `${lista.length} de ${_todasEmpresas.length} empresas`;
+  const tbody = document.getElementById('tbody-adm-empresas');
+  const semEl = document.getElementById('sem-adm-empresas');
+
+  if (lista.length === 0) { tbody.innerHTML=''; semEl.hidden=false; return; }
+  semEl.hidden = true;
+
+  tbody.innerHTML = lista.map(e => `
+    <tr>
+      <td style="font-weight:600">${e.nome}</td>
+      <td class="mono" style="font-size:12px">${e.nif||'—'}</td>
+      <td>${e.exercicio||'—'}</td>
+      <td class="mono" style="font-size:11px;color:var(--muted)" title="${e.donoUid}">${e.donoUid.slice(0,12)}…</td>
+      <td>${fmtDate(e.criadaEm)}</td>
+      <td>
+        <button class="btn btn-gold btn-sm" onclick="entrarNaEmpresa('${e.id}','${e.donoUid}')">Entrar →</button>
+      </td>
+    </tr>`).join('');
+}
+
+async function entrarNaEmpresa(empresaId, donoUid) {
+  await DB.setEmpresaActiva(empresaId, donoUid);
+  toast('A entrar na empresa…','info');
+  setTimeout(() => { location.href = 'index.html'; }, 500);
+}
+
+async function renderLixeira() {
+  const lixeira = await DB.getLixeira();
+  document.getElementById('lix-count-label').textContent = `${lixeira.length} na lixeira`;
+  const tbody = document.getElementById('tbody-lixeira');
+  const semEl = document.getElementById('sem-lixeira');
+
+  if (lixeira.length === 0) { tbody.innerHTML=''; semEl.hidden=false; return; }
+  semEl.hidden = true;
+
+  tbody.innerHTML = lixeira.map(item => `
+    <tr>
+      <td style="font-weight:600">${item.empresa.nome}</td>
+      <td class="mono" style="font-size:12px">${item.empresa.nif||'—'}</td>
+      <td class="mono" style="font-size:11px;color:var(--muted)" title="${item.donoUid}">${item.donoUid.slice(0,12)}…</td>
+      <td>${fmtDate(item.eliminadaEm)}</td>
+      <td style="display:flex;gap:6px;justify-content:flex-end">
+        <button class="btn btn-outline btn-sm" onclick="restaurar('${item.id}')">↺ Restaurar</button>
+        <button class="btn btn-sm" style="background:rgba(176,58,46,0.1);color:var(--danger);border:1px solid rgba(176,58,46,0.2)" onclick="apagarDefinitivo('${item.id}')">✕ Apagar definitivo</button>
+      </td>
+    </tr>`).join('');
+}
+
+async function restaurar(empresaId) {
+  if (!confirm('Restaurar esta empresa para o utilizador original?')) return;
+  const resultado = await DB.restaurarDaLixeira(empresaId);
+  if (resultado) {
+    toast(`Empresa "${resultado.nome}" restaurada com sucesso`,'success');
+    await renderStatsGlobais();
+    await renderTodasEmpresas();
+    await renderLixeira();
+  } else {
+    toast('Não foi possível restaurar — backup não encontrado','danger');
+  }
+}
+
+async function apagarDefinitivo(empresaId) {
+  if (!confirm('Apagar este backup PERMANENTEMENTE? Esta ação não pode ser revertida.')) return;
+  await DB.eliminarDaLixeiraDefinitivo(empresaId);
+  toast('Backup apagado em definitivo','warning');
+  await renderStatsGlobais();
+  await renderLixeira();
+}
+</script>
+</body>
+</html>

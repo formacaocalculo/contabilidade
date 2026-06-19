@@ -8,10 +8,20 @@
 //  4. Clica em "Publicar"
 //
 //  O que isto garante:
-//  Cada utilizador autenticado só pode ler/escrever os dados
-//  dentro do seu próprio "users/{uid}/...". Ninguém consegue
-//  ver ou alterar dados de outro utilizador, mesmo conhecendo o
-//  ID do documento.
+//  - Cada utilizador autenticado só pode ler/escrever os seus próprios dados em users/{uid}/**
+//  - Quem estiver listado em admins/{uid} pode ler/escrever os dados de QUALQUER utilizador
+//    (necessário para a área de Administração: ver todas as empresas, entrar nelas, etc.)
+//  - A coleção "admins" só pode ser lida pelo próprio (para o site saber "sou admin?");
+//    a ESCRITA está sempre bloqueada via app — só é editável manualmente na Firebase
+//    Console (separador Dados), por segurança, para que ninguém se possa auto-promover.
+//  - A coleção "lixeira" (backups de empresas eliminadas) só é acessível por admins.
+//
+//  Para tornares alguém administrador:
+//  1. Firebase Console → Firestore Database → separador "Dados"
+//  2. Cria uma coleção chamada "admins" (se não existir)
+//  3. Cria um documento cujo ID é o UID do utilizador (vê em Authentication → Users)
+//  4. Dentro do documento, adiciona um campo "email" (string) com o email da pessoa
+//     — é só informativo, não é usado nas regras, mas ajuda a identificar quem é quem.
 // ============================================================
 
 rules_version = '2';
@@ -19,9 +29,27 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Tudo dentro de users/{userId}/** só é acessível pelo próprio utilizador autenticado
+    function ehAdmin() {
+      return request.auth != null &&
+             exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    // Dados de cada utilizador: o próprio dono, OU qualquer administrador
     match /users/{userId}/{document=**} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read, write: if request.auth != null &&
+                            (request.auth.uid == userId || ehAdmin());
+    }
+
+    // Lista de administradores: qualquer utilizador autenticado pode LER o seu
+    // próprio documento (para saber se é admin); escrita nunca é permitida via app.
+    match /admins/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // Lixeira de backups: só administradores
+    match /lixeira/{empresaId} {
+      allow read, write: if ehAdmin();
     }
 
     // Por segurança, qualquer outro caminho não previsto é bloqueado por omissão

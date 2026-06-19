@@ -3,6 +3,7 @@ async function renderSidebar(paginaActiva) {
   const emp = await DB.empresaActiva();
   const nomeEmp   = emp ? emp.nome    : '—';
   const exercicio = emp ? emp.exercicio : '—';
+  const donoAlheio = DB.donoEmpresaActiva(); // não-nulo quando um admin "entrou" na empresa de outro utilizador
 
   const navItems = [
     { href:'index.html',        icon:'grid',   label:'Painel de Controlo' },
@@ -43,6 +44,11 @@ async function renderSidebar(paginaActiva) {
       <div class="nav-section-label">Principal</div>
       ${navHTML}
     </nav>
+
+    ${donoAlheio ? `
+    <div style="margin:0 14px 8px;padding:8px 10px;background:rgba(201,168,76,0.15);border:1px solid rgba(201,168,76,0.4);border-radius:6px;font-size:11px;color:var(--gold);text-align:center">
+      ⚠ Modo Admin — a ver empresa de outro utilizador
+    </div>` : ''}
 
     <div style="padding:8px 0;border-top:1px solid rgba(255,255,255,0.08)">
       <button

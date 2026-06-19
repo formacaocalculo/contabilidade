@@ -18,9 +18,6 @@
 // ============================================================
 
 const DB = (() => {
-
-  const ACTIVE_KEY = 'snc_empresa_activa'; // guardamos só o ID activo localmente (não é dado sensível)
-
   // ── Plano de Contas SNC padrão ───────────────────────────
   const PLANO_PADRAO = [
     { codigo:'1',    designacao:'Meios Financeiros Líquidos',          nivel:1, tipo:'Classe',   natureza:'Ativo',         movimentos:false },
@@ -94,6 +91,9 @@ const DB = (() => {
     { codigo:'S',  nome:'Salários',           tipo:'Salários',          ativo:true  },
   ];
 
+  const ACTIVE_KEY    = 'snc_empresa_activa';      // ID da empresa activa
+  const ACTIVE_OWNER  = 'snc_empresa_activa_dono';  // uid do DONO da empresa activa (normalmente = uid próprio; pode ser outro se um admin "entrou" na empresa de outro utilizador)
+
   // ── Utilitários ──────────────────────────────────────────
   function uid() {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -103,24 +103,33 @@ const DB = (() => {
     return new Date().toISOString().slice(0, 10);
   }
 
-  async function _uidUtilizador() {
+  async function _uidProprio() {
     await window.authReady;
     const user = auth.currentUser;
     if (!user) throw new Error('Utilizador não autenticado.');
     return user.uid;
   }
 
+  // uid "dono" dos dados a usar nas leituras/escritas: normalmente o próprio utilizador,
+  // mas se houver um dono activo gravado (definido por setEmpresaActiva quando um admin
+  // entra na empresa de outra pessoa), usa esse.
+  async function _uidUtilizador() {
+    const dono = localStorage.getItem(ACTIVE_OWNER);
+    if (dono) return dono;
+    return _uidProprio();
+  }
+
   // referências de coleção/documento
-  async function _empresasCol() {
-    const u = await _uidUtilizador();
+  async function _empresasCol(uidAlvo) {
+    const u = uidAlvo || await _uidUtilizador();
     return db.collection('users').doc(u).collection('empresas');
   }
-  async function _empresaDoc(empresaId) {
-    const col = await _empresasCol();
+  async function _empresaDoc(empresaId, uidAlvo) {
+    const col = await _empresasCol(uidAlvo);
     return col.doc(empresaId);
   }
-  async function _subCol(empresaId, nome) {
-    const doc = await _empresaDoc(empresaId);
+  async function _subCol(empresaId, nome, uidAlvo) {
+    const doc = await _empresaDoc(empresaId, uidAlvo);
     return doc.collection(nome);
   }
 
@@ -131,9 +140,38 @@ const DB = (() => {
     return snap.docs.map(d => ({ id: d.id, ...d.data() }));
   }
 
+  // ── Administração ────────────────────────────────────────
+  // Verifica se o utilizador autenticado está na coleção admins/{uid}.
+  // A coleção é só de leitura pelo próprio (ver regras Firestore) — não pode ser
+  // alterada via app, apenas manualmente na Firebase Console, por segurança.
+  async function isAdmin() {
+    const uid = await _uidProprio();
+    try {
+      const snap = await db.collection('admins').doc(uid).get();
+      return snap.exists;
+    } catch (e) {
+      return false; // se as regras bloquearem, assume que não é admin
+    }
+  }
+
+  // Lista TODAS as empresas de TODOS os utilizadores (collection-group query).
+  // Só deve ser chamada depois de confirmar isAdmin() === true — as regras do
+  // Firestore bloqueiam de qualquer forma para não-admins.
+  async function getTodasEmpresasAdmin() {
+    const snap = await db.collectionGroup('empresas').get();
+    return snap.docs.map(d => {
+      // path: users/{uid}/empresas/{empresaId}
+      const partes = d.ref.path.split('/');
+      const donoUid = partes[1];
+      return { id: d.id, donoUid, ...d.data() };
+    });
+  }
+
   // ── Empresas ─────────────────────────────────────────────
+  // Lista sempre as empresas do PRÓPRIO utilizador autenticado (não do "dono activo")
   async function getEmpresas() {
-    const col = await _empresasCol();
+    const uidProprio = await _uidProprio();
+    const col = await _empresasCol(uidProprio);
     return _getAllDocs(col, 'criadaEm');
   }
 
@@ -142,8 +180,19 @@ const DB = (() => {
     return localStorage.getItem(ACTIVE_KEY);
   }
 
-  function setEmpresaActiva(id) {
+  // donoUid é opcional: só é necessário passar quando um admin está a entrar
+  // numa empresa que não é sua. Quando omitido, assume-se o próprio utilizador.
+  async function setEmpresaActiva(id, donoUid) {
     localStorage.setItem(ACTIVE_KEY, id);
+    if (donoUid) {
+      localStorage.setItem(ACTIVE_OWNER, donoUid);
+    } else {
+      localStorage.removeItem(ACTIVE_OWNER); // assume-se o próprio
+    }
+  }
+
+  function donoEmpresaActiva() {
+    return localStorage.getItem(ACTIVE_OWNER) || null; // null = é o próprio utilizador
   }
 
   // Devolve o objecto completo da empresa activa (id + dados base). Não inclui subcoleções.
@@ -162,7 +211,8 @@ const DB = (() => {
   }
 
   async function criarEmpresa(dados) {
-    const col = await _empresasCol();
+    const uidProprio = await _uidProprio();
+    const col = await _empresasCol(uidProprio);
     const novaRef = col.doc(); // gera ID
     const nova = {
       nome:       dados.nome,
@@ -192,10 +242,33 @@ const DB = (() => {
     return { id: snap.id, ...snap.data() };
   }
 
-  async function eliminarEmpresa(id) {
-    const docRef = await _empresaDoc(id);
-    // eliminar subcoleções primeiro (Firestore não apaga em cascata)
+  // Elimina a empresa, mas só depois de fazer uma cópia completa (empresa + todas
+  // as subcoleções) na coleção "lixeira" no topo da base de dados — permite restauro
+  // posterior pelo admin. uidAlvo permite ao admin eliminar empresas de outros utilizadores.
+  async function eliminarEmpresa(id, uidAlvo) {
+    const uidDono = uidAlvo || await _uidUtilizador();
+    const docRef = await _empresaDoc(id, uidDono);
+    const snapEmpresa = await docRef.get();
+    if (!snapEmpresa.exists) return;
+    const dadosEmpresa = snapEmpresa.data();
+
     const subcolecoes = ['planoContas','diarios','lancamentos','clientes','faturas','ivaPeriodos'];
+    const dump = {};
+    for (const nome of subcolecoes) {
+      const col = docRef.collection(nome);
+      const snap = await col.get();
+      dump[nome] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    }
+
+    // gravar backup na lixeira ANTES de apagar
+    await db.collection('lixeira').doc(id).set({
+      donoUid: uidDono,
+      empresa: { id, ...dadosEmpresa },
+      ...dump,
+      eliminadaEm: today(),
+    });
+
+    // agora apagar de facto
     for (const nome of subcolecoes) {
       const col = docRef.collection(nome);
       const snap = await col.get();
@@ -204,10 +277,50 @@ const DB = (() => {
       if (snap.docs.length) await batch.commit();
     }
     await docRef.delete();
+
     if (localStorage.getItem(ACTIVE_KEY) === id) {
       localStorage.removeItem(ACTIVE_KEY);
+      localStorage.removeItem(ACTIVE_OWNER);
     }
   }
+
+  // ── Lixeira (backups de empresas eliminadas) — só admin ──
+  async function getLixeira() {
+    const snap = await db.collection('lixeira').orderBy('eliminadaEm','desc').get();
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  }
+
+  // Repõe uma empresa a partir do backup na lixeira, devolvendo-a ao seu dono original.
+  async function restaurarDaLixeira(empresaId) {
+    const ref = db.collection('lixeira').doc(empresaId);
+    const snap = await ref.get();
+    if (!snap.exists) return null;
+    const backup = snap.data();
+    const uidDono = backup.donoUid;
+
+    const novaRef = await _empresaDoc(empresaId, uidDono);
+    const { id, ...dadosEmpresa } = backup.empresa;
+    await novaRef.set(dadosEmpresa);
+
+    const subcolecoes = ['planoContas','diarios','lancamentos','clientes','faturas','ivaPeriodos'];
+    const batch = db.batch();
+    subcolecoes.forEach(nome => {
+      (backup[nome] || []).forEach(item => {
+        const { id: itemId, ...rest } = item;
+        batch.set(novaRef.collection(nome).doc(itemId), rest);
+      });
+    });
+    await batch.commit();
+
+    await ref.delete(); // remover da lixeira depois de restaurado
+    return { id: empresaId, donoUid: uidDono, ...dadosEmpresa };
+  }
+
+  // Apaga definitivamente um backup da lixeira (sem possibilidade de restauro)
+  async function eliminarDaLixeiraDefinitivo(empresaId) {
+    await db.collection('lixeira').doc(empresaId).delete();
+  }
+
 
   // ── Plano de Contas ──────────────────────────────────────
   async function getContas(empresaId) {
@@ -535,7 +648,11 @@ const DB = (() => {
     uid, today,
     // empresas
     getEmpresas, criarEmpresa, editarEmpresa, eliminarEmpresa,
-    getEmpresaActiva, setEmpresaActiva, empresaActiva,
+    getEmpresaActiva, setEmpresaActiva, empresaActiva, donoEmpresaActiva,
+    // administração
+    isAdmin, getTodasEmpresasAdmin,
+    // lixeira (backups de empresas eliminadas)
+    getLixeira, restaurarDaLixeira, eliminarDaLixeiraDefinitivo,
     // plano contas
     getContas, addConta, editConta, deleteConta,
     // diários

@@ -114,8 +114,8 @@ function toggleEmpDropdown() {
   if (d) d.hidden = !d.hidden;
 }
 
-function mudarEmpresa(id) {
-  DB.setEmpresaActiva(id);
+async function mudarEmpresa(id) {
+  await DB.setEmpresaActiva(id);
   location.reload();
 }
 
