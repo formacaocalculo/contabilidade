@@ -1,157 +1,19 @@
 <!DOCTYPE html>
-<html lang="pt">
+<html lang="pt-pt">
 <head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>ContaSNC — Painel</title>
-  <link rel="stylesheet" href="style.css"/>
-  <script>(function(){var t=localStorage.getItem("snc_theme")||"light";document.documentElement.setAttribute("data-theme",t);})();</script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ContaSNC</title>
+    <link rel="stylesheet" href="assets/css/shell.css">
+    <script>(function(){var t=localStorage.getItem("snc_theme")||"light";document.documentElement.setAttribute("data-theme",t);})();</script>
 </head>
 <body>
-<aside class="sidebar" id="sidebar-mount"></aside>
-
-<div class="main-wrap">
-  <header class="topbar">
-    <div class="topbar-breadcrumb">
-      <span class="crumb-current">Painel de Controlo</span>
-    </div>
-    <div class="topbar-actions">
-      <div id="empresa-selector"></div>
-      <div class="avatar" id="avatar-initials">AC</div>
-    </div>
-  </header>
-
-  <main class="page-content">
-    <div class="page-hero">
-      <h1 id="painel-titulo">Painel de Controlo</h1>
-      <p id="painel-sub">Visão geral do exercício contabilístico.</p>
+    <div id="app">
+        <!-- Os módulos injetam aqui o seu próprio layout completo (sidebar + main) -->
     </div>
 
-    <div class="stats-grid" id="stats-grid"></div>
-
-    <div class="two-col">
-      <div class="card">
-        <div class="card-header">
-          <div><h2>Módulos</h2><p>Acesso rápido a todos os módulos</p></div>
-        </div>
-        <div class="card-body">
-          <div style="display:flex;flex-direction:column;gap:10px" id="modulos-list"></div>
-        </div>
-      </div>
-
-      <div>
-        <div class="card" style="margin-bottom:16px">
-          <div class="card-header">
-            <div><h2>Últimos Lançamentos</h2><p>Os 5 mais recentes</p></div>
-            <a href="lancamentos.html" class="btn btn-outline btn-sm">Ver todos →</a>
-          </div>
-          <div id="ultimos-lanc" style="padding:0 0 4px"></div>
-        </div>
-
-        <div class="card">
-          <div class="card-header">
-            <div><h2>Calendário Fiscal</h2><p id="regime-label"></p></div>
-          </div>
-          <div class="card-body" id="calendario-fiscal"></div>
-        </div>
-      </div>
-    </div>
-  </main>
-</div>
-
-<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
-<script src="firebase-config.js"></script>
-<script src="auth-guard.js"></script>
-<script src="db.js"></script>
-<script src="_sidebar.js"></script>
-<script src="script.js"></script>
-<script>
-document.addEventListener('DOMContentLoaded', async () => {
-  const user = await window.authReady;
-  if (!user) return; // auth-guard já está a redirecionar para login
-
-  await renderSidebar('index.html');
-  const emp = await DB.empresaActiva();
-  if (!emp) { location.href = 'empresas.html'; return; }
-
-  document.getElementById('painel-titulo').textContent = emp.nome;
-  document.getElementById('painel-sub').textContent = `Exercício ${emp.exercicio} · NIF ${emp.nif||'—'} · Regime ${emp.regime}`;
-  document.getElementById('avatar-initials').textContent = emp.nome.split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase();
-
-  const [stats, lancs, diarios, contas] = await Promise.all([
-    DB.statsEmpresa(emp.id),
-    DB.getLancamentos(emp.id),
-    DB.getDiarios(emp.id),
-    DB.getContas(emp.id),
-  ]);
-
-  document.getElementById('stats-grid').innerHTML = `
-    <div class="stat-card"><div class="stat-label">Plano de Contas</div><div class="stat-value">${contas.length}</div><div class="stat-sub">contas SNC</div></div>
-    <div class="stat-card green"><div class="stat-label">Lançamentos ${emp.exercicio}</div><div class="stat-value">${stats.totalLanc}</div><div class="stat-sub">registados</div></div>
-    <div class="stat-card slate"><div class="stat-label">Diários Activos</div><div class="stat-value">${diarios.filter(d=>d.ativo).length}</div><div class="stat-sub">configurados</div></div>
-    <div class="stat-card danger"><div class="stat-label">IVA a Entregar</div><div class="stat-value">${fmtEUR(stats.ivaEntregar)}</div><div class="stat-sub">estimativa</div></div>
-  `;
-
-  const modulos = [
-    { href:'plano-contas.html', emoji:'📋', titulo:'Plano de Contas (SNC)', sub:'Pré-configurado. Subcontas personalizáveis.' },
-    { href:'diarios.html',      emoji:'📁', titulo:'Gestão de Diários',     sub:'Compras, Vendas, Bancos, OD e mais.' },
-    { href:'lancamentos.html',  emoji:'✏️', titulo:'Lançamentos',           sub:'Manual com automatismos IVA e retenções.' },
-    { href:'faturacao.html',    emoji:'🧮', titulo:'Faturação',             sub:'Faturas de venda, clientes e lançamento automático.' },
-    { href:'iva.html',          emoji:'🧾', titulo:'Processamento de IVA',  sub:'Apuramento, SAF-T(PT) e Declaração.' },
-  ];
-  document.getElementById('modulos-list').innerHTML = modulos.map(m=>`
-    <a href="${m.href}" style="text-decoration:none">
-      <div style="display:flex;align-items:center;gap:14px;padding:12px 14px;border:1px solid var(--border);border-radius:var(--radius);background:var(--cream);transition:border-color .15s" onmouseover="this.style.borderColor='var(--gold)'" onmouseout="this.style.borderColor='var(--border)'">
-        <div style="width:38px;height:38px;background:var(--navy);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">${m.emoji}</div>
-        <div><div style="font-weight:600;font-size:13px;color:var(--navy)">${m.titulo}</div><div style="font-size:11px;color:var(--muted);margin-top:1px">${m.sub}</div></div>
-        <div style="margin-left:auto;color:var(--muted)">›</div>
-      </div>
-    </a>
-  `).join('');
-
-  // últimos lançamentos
-  const ultimos = lancs.slice(0,5);
-  if (ultimos.length === 0) {
-    document.getElementById('ultimos-lanc').innerHTML = '<p style="padding:16px 24px;font-size:13px;color:var(--muted)">Sem lançamentos. <a href="lancamentos.html">Registar o primeiro →</a></p>';
-  } else {
-    document.getElementById('ultimos-lanc').innerHTML = `
-      <table class="data-table">
-        <thead><tr><th>Data</th><th>Diário</th><th>Descrição</th><th class="amount">Valor</th></tr></thead>
-        <tbody>
-          ${ultimos.map(l=>`
-            <tr>
-              <td>${fmtDate(l.data)}</td>
-              <td><span class="badge badge-slate">${l.diario}</span></td>
-              <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${l.descricao||'—'}</td>
-              <td class="amount">${fmtEUR(l.valorTotal||l.valorBase)}</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>`;
-  }
-
-  // calendário fiscal
-  const regimeLabel = {mensal:'Regime Mensal',trimestral:'Regime Trimestral',isento:'Isento de IVA'}[emp.regime]||emp.regime;
-  document.getElementById('regime-label').textContent = regimeLabel;
-  document.getElementById('calendario-fiscal').innerHTML = `
-    <div style="display:flex;flex-direction:column;gap:0">
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border)">
-        <div><div style="font-size:13px;font-weight:600">Declaração Periódica IVA</div><div style="font-size:11px;color:var(--muted)">Período actual</div></div>
-        <span class="badge badge-danger">15 do mês</span>
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border)">
-        <div><div style="font-size:13px;font-weight:600">Pagamento IVA</div><div style="font-size:11px;color:var(--muted)">Após declaração</div></div>
-        <span class="badge badge-danger">20 do mês</span>
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0">
-        <div><div style="font-size:13px;font-weight:600">Gerar SAF-T(PT)</div><div style="font-size:11px;color:var(--muted)">Obrigação mensal</div></div>
-        <a href="iva.html" class="btn btn-outline btn-sm">Gerar</a>
-      </div>
-    </div>
-  `;
-});
-</script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script type="module" src="assets/js/router.js"></script>
+    <script type="module" src="assets/js/app.js"></script>
 </body>
 </html>
